@@ -8,7 +8,7 @@
 
 ```toml
 [dependencies]
-discordrs = "0.1.0"
+discordrs = "0.1.1"
 serenity = { version = "0.12.5", features = ["client", "gateway", "model", "http", "rustls_backend"] }
 ```
 
@@ -87,7 +87,39 @@ async fn respond_modal(http: &Http, interaction: &ModalInteraction) -> Result<()
 - `followup_with_container(...)`: defer 이후 후속 응답
 - `respond_with_modal(...)`: raw 모달 응답
 
-## 7) 참고
+## 7) 모달 Radio/Checkbox 컴포넌트
+
+```rust
+use discordrs::{
+    CheckboxBuilder, CheckboxGroupBuilder, ModalBuilder, RadioGroupBuilder, SelectOption,
+};
+
+let modal = ModalBuilder::new("preferences_modal", "Preferences")
+    .add_radio_group(
+        "테마",
+        Some("하나만 선택"),
+        RadioGroupBuilder::new("theme")
+            .add_option(SelectOption::new("라이트", "light"))
+            .add_option(SelectOption::new("다크", "dark"))
+            .required(true),
+    )
+    .add_checkbox_group(
+        "알림 채널",
+        Some("여러 개 선택 가능"),
+        CheckboxGroupBuilder::new("notify_channels")
+            .add_option(SelectOption::new("이메일", "email"))
+            .add_option(SelectOption::new("푸시", "push"))
+            .min_values(0)
+            .max_values(2),
+    )
+    .add_checkbox(
+        "약관 동의",
+        None,
+        CheckboxBuilder::new("agree_terms").required(true),
+    );
+```
+
+## 8) 참고
 
 - `discordrs`는 serenity가 아직 완전 지원하지 않는 V2 컴포넌트를 **raw HTTP payload**로 전송합니다.
 - 버튼/셀렉트의 `custom_id`는 핸들러 라우팅 규칙과 반드시 일치시켜야 합니다.**

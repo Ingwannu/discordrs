@@ -32,6 +32,9 @@ pub mod component_type {
     pub const CONTAINER: u8 = 17;
     pub const LABEL: u8 = 18;
     pub const FILE_UPLOAD: u8 = 19;
+    pub const RADIO_GROUP: u8 = 21;
+    pub const CHECKBOX_GROUP: u8 = 22;
+    pub const CHECKBOX: u8 = 23;
 }
 
 /// 버튼 스타일
@@ -642,6 +645,186 @@ impl SelectMenuBuilder {
 }
 
 #[derive(Clone, Serialize, Deserialize, Default)]
+pub struct RadioGroupBuilder {
+    #[serde(rename = "type")]
+    component_type: u8,
+    custom_id: String,
+    options: Vec<SelectOption>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    required: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    disabled: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    id: Option<u32>,
+}
+
+impl RadioGroupBuilder {
+    pub fn new(custom_id: &str) -> Self {
+        Self {
+            component_type: component_type::RADIO_GROUP,
+            custom_id: custom_id.to_string(),
+            options: Vec::new(),
+            required: None,
+            disabled: None,
+            id: None,
+        }
+    }
+
+    pub fn add_option(mut self, option: SelectOption) -> Self {
+        self.options.push(option);
+        self
+    }
+
+    pub fn add_options(mut self, options: Vec<SelectOption>) -> Self {
+        self.options.extend(options);
+        self
+    }
+
+    pub fn required(mut self, required: bool) -> Self {
+        self.required = Some(required);
+        self
+    }
+
+    pub fn disabled(mut self, disabled: bool) -> Self {
+        self.disabled = Some(disabled);
+        self
+    }
+
+    pub fn id(mut self, id: u32) -> Self {
+        self.id = Some(id);
+        self
+    }
+
+    pub fn build(self) -> Value {
+        serde_json::to_value(self).unwrap_or_default()
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize, Default)]
+pub struct CheckboxGroupBuilder {
+    #[serde(rename = "type")]
+    component_type: u8,
+    custom_id: String,
+    options: Vec<SelectOption>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    min_values: Option<u8>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_values: Option<u8>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    required: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    disabled: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    id: Option<u32>,
+}
+
+impl CheckboxGroupBuilder {
+    pub fn new(custom_id: &str) -> Self {
+        Self {
+            component_type: component_type::CHECKBOX_GROUP,
+            custom_id: custom_id.to_string(),
+            options: Vec::new(),
+            min_values: None,
+            max_values: None,
+            required: None,
+            disabled: None,
+            id: None,
+        }
+    }
+
+    pub fn add_option(mut self, option: SelectOption) -> Self {
+        self.options.push(option);
+        self
+    }
+
+    pub fn add_options(mut self, options: Vec<SelectOption>) -> Self {
+        self.options.extend(options);
+        self
+    }
+
+    pub fn min_values(mut self, min: u8) -> Self {
+        self.min_values = Some(min);
+        self
+    }
+
+    pub fn max_values(mut self, max: u8) -> Self {
+        self.max_values = Some(max);
+        self
+    }
+
+    pub fn required(mut self, required: bool) -> Self {
+        self.required = Some(required);
+        self
+    }
+
+    pub fn disabled(mut self, disabled: bool) -> Self {
+        self.disabled = Some(disabled);
+        self
+    }
+
+    pub fn id(mut self, id: u32) -> Self {
+        self.id = Some(id);
+        self
+    }
+
+    pub fn build(self) -> Value {
+        serde_json::to_value(self).unwrap_or_default()
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize, Default)]
+pub struct CheckboxBuilder {
+    #[serde(rename = "type")]
+    component_type: u8,
+    custom_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    checked: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    required: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    disabled: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    id: Option<u32>,
+}
+
+impl CheckboxBuilder {
+    pub fn new(custom_id: &str) -> Self {
+        Self {
+            component_type: component_type::CHECKBOX,
+            custom_id: custom_id.to_string(),
+            checked: None,
+            required: None,
+            disabled: None,
+            id: None,
+        }
+    }
+
+    pub fn checked(mut self, checked: bool) -> Self {
+        self.checked = Some(checked);
+        self
+    }
+
+    pub fn required(mut self, required: bool) -> Self {
+        self.required = Some(required);
+        self
+    }
+
+    pub fn disabled(mut self, disabled: bool) -> Self {
+        self.disabled = Some(disabled);
+        self
+    }
+
+    pub fn id(mut self, id: u32) -> Self {
+        self.id = Some(id);
+        self
+    }
+
+    pub fn build(self) -> Value {
+        serde_json::to_value(self).unwrap_or_default()
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize, Default)]
 pub struct ThumbnailBuilder {
     #[serde(rename = "type")]
     component_type: u8,
@@ -754,6 +937,36 @@ impl LabelBuilder {
             label: label.to_string(),
             description: None,
             component: file_upload.build(),
+            id: None,
+        }
+    }
+
+    pub fn with_radio_group(label: &str, radio_group: RadioGroupBuilder) -> Self {
+        Self {
+            component_type: component_type::LABEL,
+            label: label.to_string(),
+            description: None,
+            component: radio_group.build(),
+            id: None,
+        }
+    }
+
+    pub fn with_checkbox_group(label: &str, checkbox_group: CheckboxGroupBuilder) -> Self {
+        Self {
+            component_type: component_type::LABEL,
+            label: label.to_string(),
+            description: None,
+            component: checkbox_group.build(),
+            id: None,
+        }
+    }
+
+    pub fn with_checkbox(label: &str, checkbox: CheckboxBuilder) -> Self {
+        Self {
+            component_type: component_type::LABEL,
+            label: label.to_string(),
+            description: None,
+            component: checkbox.build(),
             id: None,
         }
     }
@@ -1007,6 +1220,48 @@ impl ModalBuilder {
     ) -> Self {
         self.components.push(
             LabelBuilder::with_file_upload(label, file_upload)
+                .description(description.unwrap_or_default())
+                .build(),
+        );
+        self
+    }
+
+    pub fn add_radio_group(
+        mut self,
+        label: &str,
+        description: Option<&str>,
+        radio_group: RadioGroupBuilder,
+    ) -> Self {
+        self.components.push(
+            LabelBuilder::with_radio_group(label, radio_group)
+                .description(description.unwrap_or_default())
+                .build(),
+        );
+        self
+    }
+
+    pub fn add_checkbox_group(
+        mut self,
+        label: &str,
+        description: Option<&str>,
+        checkbox_group: CheckboxGroupBuilder,
+    ) -> Self {
+        self.components.push(
+            LabelBuilder::with_checkbox_group(label, checkbox_group)
+                .description(description.unwrap_or_default())
+                .build(),
+        );
+        self
+    }
+
+    pub fn add_checkbox(
+        mut self,
+        label: &str,
+        description: Option<&str>,
+        checkbox: CheckboxBuilder,
+    ) -> Self {
+        self.components.push(
+            LabelBuilder::with_checkbox(label, checkbox)
                 .description(description.unwrap_or_default())
                 .build(),
         );

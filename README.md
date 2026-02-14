@@ -4,13 +4,46 @@
 
 - Discord Components V2 builders (`Container`, `TextDisplay`, `MediaGallery`, `Section`, `SelectMenu`, etc.)
 - Modal builders and raw interaction response helpers
+- Modal `Radio Group`, `Checkbox Group`, and `Checkbox` component builders
 - Convenience helpers for sending/editing/followup messages with Components V2
 
 ## Install
 
 ```toml
 [dependencies]
-discordrs = "0.1"
+discordrs = "0.1.1"
+```
+
+## Modal Example (Radio/Checkbox)
+
+```rust
+use discordrs::{
+    CheckboxBuilder, CheckboxGroupBuilder, ModalBuilder, RadioGroupBuilder, SelectOption,
+};
+
+let modal = ModalBuilder::new("preferences_modal", "Preferences")
+    .add_radio_group(
+        "Theme",
+        Some("Pick one"),
+        RadioGroupBuilder::new("theme")
+            .add_option(SelectOption::new("Light", "light"))
+            .add_option(SelectOption::new("Dark", "dark"))
+            .required(true),
+    )
+    .add_checkbox_group(
+        "Notifications",
+        Some("Choose any"),
+        CheckboxGroupBuilder::new("notify_channels")
+            .add_option(SelectOption::new("Email", "email"))
+            .add_option(SelectOption::new("Push", "push"))
+            .min_values(0)
+            .max_values(2),
+    )
+    .add_checkbox(
+        "Agree to Terms",
+        None,
+        CheckboxBuilder::new("agree_terms").required(true),
+    );
 ```
 
 ## Quick Example
