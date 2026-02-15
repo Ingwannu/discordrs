@@ -1,6 +1,6 @@
 ﻿[package]
 name = "discordrs"
-version = "0.1.1"
+version = "0.1.3"
 edition = "2021"
 description = "Discord Components V2 and modal interaction helpers for serenity"
 license = "MIT OR Apache-2.0"
