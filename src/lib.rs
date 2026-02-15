@@ -9,6 +9,10 @@ use serde_json::Value;
 
 pub type Error = Box<dyn std::error::Error + Send + Sync>;
 
+fn to_json_value<T: Serialize>(value: T) -> Value {
+    serde_json::to_value(value).expect("failed to serialize components v2 value")
+}
+
 /// Discord Components v2 타입 번호
 /// 왜 필요한지: Discord API에서 각 컴포넌트 타입을 구분하는 데 사용
 /// 어떤 코드와 연계: 모든 컴포넌트 빌더에서 type 필드에 사용
@@ -176,7 +180,7 @@ impl MediaGalleryBuilder {
     }
 
     pub fn build(self) -> Value {
-        serde_json::to_value(self).unwrap_or_default()
+        to_json_value(self)
     }
 }
 
@@ -213,7 +217,7 @@ impl TextDisplayBuilder {
     }
 
     pub fn build(self) -> Value {
-        serde_json::to_value(self).unwrap_or_default()
+        to_json_value(self)
     }
 }
 
@@ -259,7 +263,7 @@ impl SeparatorBuilder {
     }
 
     pub fn build(self) -> Value {
-        serde_json::to_value(self).unwrap_or_default()
+        to_json_value(self)
     }
 }
 
@@ -334,7 +338,7 @@ impl ButtonBuilder {
     }
 
     pub fn build(self) -> Value {
-        serde_json::to_value(self).unwrap_or_default()
+        to_json_value(self)
     }
 }
 
@@ -411,7 +415,7 @@ impl TextInputBuilder {
     }
 
     pub fn build(self) -> Value {
-        serde_json::to_value(self).unwrap_or_default()
+        to_json_value(self)
     }
 }
 
@@ -463,7 +467,7 @@ impl ActionRowBuilder {
     }
 
     pub fn build(self) -> Value {
-        serde_json::to_value(self).unwrap_or_default()
+        to_json_value(self)
     }
 }
 
@@ -640,7 +644,7 @@ impl SelectMenuBuilder {
     }
 
     pub fn build(self) -> Value {
-        serde_json::to_value(self).unwrap_or_default()
+        to_json_value(self)
     }
 }
 
@@ -696,7 +700,7 @@ impl RadioGroupBuilder {
     }
 
     pub fn build(self) -> Value {
-        serde_json::to_value(self).unwrap_or_default()
+        to_json_value(self)
     }
 }
 
@@ -768,7 +772,7 @@ impl CheckboxGroupBuilder {
     }
 
     pub fn build(self) -> Value {
-        serde_json::to_value(self).unwrap_or_default()
+        to_json_value(self)
     }
 }
 
@@ -820,7 +824,7 @@ impl CheckboxBuilder {
     }
 
     pub fn build(self) -> Value {
-        serde_json::to_value(self).unwrap_or_default()
+        to_json_value(self)
     }
 }
 
@@ -866,7 +870,7 @@ impl ThumbnailBuilder {
     }
 
     pub fn build(self) -> Value {
-        serde_json::to_value(self).unwrap_or_default()
+        to_json_value(self)
     }
 }
 
@@ -904,7 +908,7 @@ impl FileBuilder {
     }
 
     pub fn build(self) -> Value {
-        serde_json::to_value(self).unwrap_or_default()
+        to_json_value(self)
     }
 }
 
@@ -982,7 +986,7 @@ impl LabelBuilder {
     }
 
     pub fn build(self) -> Value {
-        serde_json::to_value(self).unwrap_or_default()
+        to_json_value(self)
     }
 }
 
@@ -1034,7 +1038,7 @@ impl FileUploadBuilder {
     }
 
     pub fn build(self) -> Value {
-        serde_json::to_value(self).unwrap_or_default()
+        to_json_value(self)
     }
 }
 
@@ -1080,7 +1084,7 @@ impl SectionBuilder {
     }
 
     pub fn build(self) -> Value {
-        serde_json::to_value(self).unwrap_or_default()
+        to_json_value(self)
     }
 }
 
@@ -1172,7 +1176,7 @@ impl ContainerBuilder {
     }
 
     pub fn build(self) -> Value {
-        serde_json::to_value(self).unwrap_or_default()
+        to_json_value(self)
     }
 }
 
@@ -1184,6 +1188,14 @@ pub struct ModalBuilder {
 }
 
 impl ModalBuilder {
+    fn with_optional_description(label: LabelBuilder, description: Option<&str>) -> LabelBuilder {
+        if let Some(description) = description {
+            label.description(description)
+        } else {
+            label
+        }
+    }
+
     pub fn new(custom_id: &str, title: &str) -> Self {
         Self {
             custom_id: custom_id.to_string(),
@@ -1205,9 +1217,11 @@ impl ModalBuilder {
         select: SelectMenuBuilder,
     ) -> Self {
         self.components.push(
-            LabelBuilder::with_select_menu(label, select)
-                .description(description.unwrap_or_default())
-                .build(),
+            Self::with_optional_description(
+                LabelBuilder::with_select_menu(label, select),
+                description,
+            )
+            .build(),
         );
         self
     }
@@ -1219,9 +1233,11 @@ impl ModalBuilder {
         file_upload: FileUploadBuilder,
     ) -> Self {
         self.components.push(
-            LabelBuilder::with_file_upload(label, file_upload)
-                .description(description.unwrap_or_default())
-                .build(),
+            Self::with_optional_description(
+                LabelBuilder::with_file_upload(label, file_upload),
+                description,
+            )
+            .build(),
         );
         self
     }
@@ -1233,9 +1249,11 @@ impl ModalBuilder {
         radio_group: RadioGroupBuilder,
     ) -> Self {
         self.components.push(
-            LabelBuilder::with_radio_group(label, radio_group)
-                .description(description.unwrap_or_default())
-                .build(),
+            Self::with_optional_description(
+                LabelBuilder::with_radio_group(label, radio_group),
+                description,
+            )
+            .build(),
         );
         self
     }
@@ -1247,9 +1265,11 @@ impl ModalBuilder {
         checkbox_group: CheckboxGroupBuilder,
     ) -> Self {
         self.components.push(
-            LabelBuilder::with_checkbox_group(label, checkbox_group)
-                .description(description.unwrap_or_default())
-                .build(),
+            Self::with_optional_description(
+                LabelBuilder::with_checkbox_group(label, checkbox_group),
+                description,
+            )
+            .build(),
         );
         self
     }
@@ -1261,9 +1281,11 @@ impl ModalBuilder {
         checkbox: CheckboxBuilder,
     ) -> Self {
         self.components.push(
-            LabelBuilder::with_checkbox(label, checkbox)
-                .description(description.unwrap_or_default())
-                .build(),
+            Self::with_optional_description(
+                LabelBuilder::with_checkbox(label, checkbox),
+                description,
+            )
+            .build(),
         );
         self
     }
@@ -1284,7 +1306,7 @@ impl ModalBuilder {
     }
 
     pub fn build(self) -> Value {
-        serde_json::to_value(self).unwrap_or_default()
+        to_json_value(self)
     }
 }
 
@@ -1489,6 +1511,46 @@ fn deserialize_components(_components: &[Value]) -> Vec<serenity::CreateActionRo
     vec![]
 }
 
+fn components_v2_flags(ephemeral: bool) -> u64 {
+    let mut flags = MESSAGE_FLAG_IS_COMPONENTS_V2;
+    if ephemeral {
+        flags |= 1 << 6;
+    }
+    flags
+}
+
+struct ComponentsV2Payload {
+    components: Vec<Value>,
+    ephemeral: bool,
+}
+
+impl ComponentsV2Payload {
+    fn new(components: Vec<Value>) -> Self {
+        Self {
+            components,
+            ephemeral: false,
+        }
+    }
+
+    fn ephemeral(mut self, ephemeral: bool) -> Self {
+        self.ephemeral = ephemeral;
+        self
+    }
+
+    fn into_map(self) -> Result<serde_json::Map<String, Value>, Error> {
+        let mut map = serde_json::Map::new();
+        map.insert(
+            "components".to_string(),
+            serde_json::to_value(&self.components)?,
+        );
+        map.insert(
+            "flags".to_string(),
+            serde_json::Value::Number(components_v2_flags(self.ephemeral).into()),
+        );
+        Ok(map)
+    }
+}
+
 /// Raw HTTP 요청으로 Components v2 메시지 전송
 /// 왜 필요한지: serenity의 기본 빌더가 Components v2 Container를 지원하지 않음
 /// 어떤 코드와 연계: 모든 Components v2 메시지 전송에서 사용
@@ -1500,19 +1562,7 @@ pub async fn send_container_message(
 ) -> Result<serenity::Message, Error> {
     // serenity의 fire 메서드를 사용하여 raw 요청 전송
     // Components v2는 components 배열에 Container를 직접 포함
-    let components_json = vec![container.build()];
-
-    // serenity의 CreateMessage를 확장하여 raw components 전송
-    // MessageFlags::IS_COMPONENTS_V2 (1 << 15 = 32768) 설정
-    let mut map = serde_json::Map::new();
-    map.insert(
-        "components".to_string(),
-        serde_json::to_value(&components_json)?,
-    );
-    map.insert(
-        "flags".to_string(),
-        serde_json::Value::Number(MESSAGE_FLAG_IS_COMPONENTS_V2.into()),
-    );
+    let map = ComponentsV2Payload::new(vec![container.build()]).into_map()?;
 
     let result = http.send_message(channel_id, vec![], &map).await?;
     Ok(result)
@@ -1544,19 +1594,9 @@ pub async fn respond_with_container(
     container: ContainerBuilder,
     ephemeral: bool,
 ) -> Result<(), Error> {
-    let components_json = vec![container.build()];
-
-    let mut flags = MESSAGE_FLAG_IS_COMPONENTS_V2;
-    if ephemeral {
-        flags |= 1 << 6; // EPHEMERAL flag
-    }
-
-    let mut map = serde_json::Map::new();
-    map.insert(
-        "components".to_string(),
-        serde_json::to_value(&components_json)?,
-    );
-    map.insert("flags".to_string(), serde_json::Value::Number(flags.into()));
+    let map = ComponentsV2Payload::new(vec![container.build()])
+        .ephemeral(ephemeral)
+        .into_map()?;
 
     let response_data = serde_json::json!({
         "type": 4, // CHANNEL_MESSAGE_WITH_SOURCE
@@ -1579,19 +1619,9 @@ pub async fn respond_component_with_container(
     container: ContainerBuilder,
     ephemeral: bool,
 ) -> Result<(), Error> {
-    let components_json = vec![container.build()];
-
-    let mut flags = MESSAGE_FLAG_IS_COMPONENTS_V2;
-    if ephemeral {
-        flags |= 1 << 6; // EPHEMERAL flag
-    }
-
-    let mut map = serde_json::Map::new();
-    map.insert(
-        "components".to_string(),
-        serde_json::to_value(&components_json)?,
-    );
-    map.insert("flags".to_string(), serde_json::Value::Number(flags.into()));
+    let map = ComponentsV2Payload::new(vec![container.build()])
+        .ephemeral(ephemeral)
+        .into_map()?;
 
     let response_data = serde_json::json!({
         "type": 4, // CHANNEL_MESSAGE_WITH_SOURCE
@@ -1611,19 +1641,9 @@ pub async fn respond_modal_with_container(
     container: ContainerBuilder,
     ephemeral: bool,
 ) -> Result<(), Error> {
-    let components_json = vec![container.build()];
-
-    let mut flags = MESSAGE_FLAG_IS_COMPONENTS_V2;
-    if ephemeral {
-        flags |= 1 << 6;
-    }
-
-    let mut map = serde_json::Map::new();
-    map.insert(
-        "components".to_string(),
-        serde_json::to_value(&components_json)?,
-    );
-    map.insert("flags".to_string(), serde_json::Value::Number(flags.into()));
+    let map = ComponentsV2Payload::new(vec![container.build()])
+        .ephemeral(ephemeral)
+        .into_map()?;
 
     let response_data = serde_json::json!({
         "type": 4,
@@ -1643,19 +1663,9 @@ pub async fn followup_with_container(
     container: ContainerBuilder,
     ephemeral: bool,
 ) -> Result<serenity::Message, Error> {
-    let components_json = vec![container.build()];
-
-    let mut flags = MESSAGE_FLAG_IS_COMPONENTS_V2;
-    if ephemeral {
-        flags |= 1 << 6;
-    }
-
-    let mut map = serde_json::Map::new();
-    map.insert(
-        "components".to_string(),
-        serde_json::to_value(&components_json)?,
-    );
-    map.insert("flags".to_string(), serde_json::Value::Number(flags.into()));
+    let map = ComponentsV2Payload::new(vec![container.build()])
+        .ephemeral(ephemeral)
+        .into_map()?;
 
     let result = http
         .create_followup_message(interaction_token, &map, vec![])
@@ -1670,17 +1680,7 @@ pub async fn edit_message_with_container(
     message_id: serenity::MessageId,
     container: ContainerBuilder,
 ) -> Result<serenity::Message, Error> {
-    let components_json = vec![container.build()];
-
-    let mut map = serde_json::Map::new();
-    map.insert(
-        "components".to_string(),
-        serde_json::to_value(&components_json)?,
-    );
-    map.insert(
-        "flags".to_string(),
-        serde_json::Value::Number(MESSAGE_FLAG_IS_COMPONENTS_V2.into()),
-    );
+    let map = ComponentsV2Payload::new(vec![container.build()]).into_map()?;
 
     let result = http
         .edit_message(channel_id, message_id, &map, vec![])
@@ -1694,17 +1694,7 @@ pub async fn update_component_with_container(
     interaction: &serenity::ComponentInteraction,
     container: ContainerBuilder,
 ) -> Result<(), Error> {
-    let components_json = vec![container.build()];
-
-    let mut map = serde_json::Map::new();
-    map.insert(
-        "components".to_string(),
-        serde_json::to_value(&components_json)?,
-    );
-    map.insert(
-        "flags".to_string(),
-        serde_json::Value::Number(MESSAGE_FLAG_IS_COMPONENTS_V2.into()),
-    );
+    let map = ComponentsV2Payload::new(vec![container.build()]).into_map()?;
 
     let response_data = serde_json::json!({
         "type": 7, // UPDATE_MESSAGE
@@ -1771,15 +1761,7 @@ pub async fn send_components_v2(
     channel_id: ChannelId,
     message: ComponentsV2Message,
 ) -> Result<serenity::Message, Error> {
-    let mut map = serde_json::Map::new();
-    map.insert(
-        "components".to_string(),
-        serde_json::to_value(&message.build())?,
-    );
-    map.insert(
-        "flags".to_string(),
-        serde_json::Value::Number(MESSAGE_FLAG_IS_COMPONENTS_V2.into()),
-    );
+    let map = ComponentsV2Payload::new(message.build()).into_map()?;
 
     let result = http.send_message(channel_id, vec![], &map).await?;
     Ok(result)
@@ -1792,17 +1774,9 @@ pub async fn respond_with_components_v2(
     message: ComponentsV2Message,
     ephemeral: bool,
 ) -> Result<(), Error> {
-    let mut flags = MESSAGE_FLAG_IS_COMPONENTS_V2;
-    if ephemeral {
-        flags |= 1 << 6;
-    }
-
-    let mut map = serde_json::Map::new();
-    map.insert(
-        "components".to_string(),
-        serde_json::to_value(&message.build())?,
-    );
-    map.insert("flags".to_string(), serde_json::Value::Number(flags.into()));
+    let map = ComponentsV2Payload::new(message.build())
+        .ephemeral(ephemeral)
+        .into_map()?;
 
     let response_data = serde_json::json!({
         "type": 4,
@@ -1822,17 +1796,9 @@ pub async fn respond_component_with_components_v2(
     message: ComponentsV2Message,
     ephemeral: bool,
 ) -> Result<(), Error> {
-    let mut flags = MESSAGE_FLAG_IS_COMPONENTS_V2;
-    if ephemeral {
-        flags |= 1 << 6;
-    }
-
-    let mut map = serde_json::Map::new();
-    map.insert(
-        "components".to_string(),
-        serde_json::to_value(&message.build())?,
-    );
-    map.insert("flags".to_string(), serde_json::Value::Number(flags.into()));
+    let map = ComponentsV2Payload::new(message.build())
+        .ephemeral(ephemeral)
+        .into_map()?;
 
     let response_data = serde_json::json!({
         "type": 4,
