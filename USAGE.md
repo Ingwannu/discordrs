@@ -130,7 +130,7 @@ use serenity::all::GuildId;
 use serenity::http::Http;
 
 async fn register(http: &Http, guild_id: GuildId) -> Result<(), discordrs::Error> {
-    let commands = SlashCommandSet::new()
+    let mut commands = SlashCommandSet::new()
         .with_command(
             SlashCommandBuilder::new("ping", "지연 시간 확인")
                 .dm_permission(false)
@@ -142,9 +142,14 @@ async fn register(http: &Http, guild_id: GuildId) -> Result<(), discordrs::Error
         )
         .with_commands(vec![SlashCommandBuilder::new("about", "봇 정보")]);
 
+    // 이름 기반 upsert/remove
+    commands.set_command(SlashCommandBuilder::new("ping", "업데이트된 지연 시간 확인"));
+    let _ = commands.remove("about");
+    assert!(commands.contains("ping"));
+
     // payload 확인 (set을 소모하지 않음)
     let payload = commands.payload();
-    assert_eq!(payload.len(), 2);
+    assert_eq!(payload.len(), 1);
 
     // 통합 scope API
     let _ = commands.register_ref(http, SlashCommandScope::Global).await?;
@@ -189,6 +194,7 @@ router.set_component_fallback("handle_component_fallback");
 - exact 미스 시 prefix 매칭
 - prefix가 여러 개면 **가장 긴 prefix** 우선
 - 매칭 실패 시 타입별 fallback(`set_*_fallback`)이 있으면 fallback 사용
+- `set_*`은 upsert, `insert_*`는 추가, `remove_*`는 삭제
 - 타입별 헬퍼: `resolve_command`, `resolve_component`, `resolve_modal`
 
 ## 10) 참고

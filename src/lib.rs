@@ -2086,6 +2086,11 @@ impl SlashCommandBuilder {
     pub fn build(self) -> Value {
         to_json_value(self)
     }
+
+    /// Command name used as a stable key when managing command collections.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
 }
 
 /// Ergonomic collection builder for slash command registration.
@@ -2126,6 +2131,28 @@ impl SlashCommandSet {
         self.commands.push(command);
     }
 
+    /// Insert-or-replace by command name.
+    ///
+    /// Returns the previously registered command with the same name when replaced.
+    pub fn set_command(&mut self, command: SlashCommandBuilder) -> Option<SlashCommandBuilder> {
+        if let Some(existing) = self
+            .commands
+            .iter_mut()
+            .find(|existing| existing.name() == command.name())
+        {
+            return Some(std::mem::replace(existing, command));
+        }
+
+        self.commands.push(command);
+        None
+    }
+
+    /// Builder-style insert-or-replace by command name.
+    pub fn with_set_command(mut self, command: SlashCommandBuilder) -> Self {
+        self.set_command(command);
+        self
+    }
+
     pub fn extend<I>(&mut self, commands: I)
     where
         I: IntoIterator<Item = SlashCommandBuilder>,
@@ -2135,6 +2162,22 @@ impl SlashCommandSet {
 
     pub fn clear(&mut self) {
         self.commands.clear();
+    }
+
+    /// Check if a command with this name exists.
+    pub fn contains(&self, name: &str) -> bool {
+        self.commands.iter().any(|command| command.name() == name)
+    }
+
+    /// Remove a command by name.
+    ///
+    /// Returns the removed command when found.
+    pub fn remove(&mut self, name: &str) -> Option<SlashCommandBuilder> {
+        let index = self
+            .commands
+            .iter()
+            .position(|command| command.name() == name)?;
+        Some(self.commands.remove(index))
     }
 
     /// Build a bulk-overwrite payload while keeping this set intact.
@@ -2924,6 +2967,37 @@ mod tests {
 
         set.clear();
         assert!(set.is_empty());
+    }
+
+    #[test]
+    fn slash_command_set_supports_name_based_upsert_and_remove() {
+        let mut set = SlashCommandSet::new()
+            .with_command(SlashCommandBuilder::new("ping", "Latency check"))
+            .with_set_command(SlashCommandBuilder::new("echo", "Echo input"));
+
+        assert!(set.contains("ping"));
+        assert!(set.contains("echo"));
+        assert!(!set.contains("about"));
+
+        let replaced = set
+            .set_command(SlashCommandBuilder::new("ping", "Updated ping"))
+            .expect("ping should be replaced");
+        assert_eq!(replaced.name(), "ping");
+        assert_eq!(set.len(), 2);
+
+        let payload = set.payload();
+        assert_eq!(payload.len(), 2);
+        assert_eq!(payload[0].get("name").and_then(Value::as_str), Some("ping"));
+        assert_eq!(
+            payload[0].get("description").and_then(Value::as_str),
+            Some("Updated ping")
+        );
+
+        let removed = set.remove("echo").expect("echo should be removed");
+        assert_eq!(removed.name(), "echo");
+        assert!(!set.contains("echo"));
+        assert_eq!(set.len(), 1);
+        assert!(set.remove("missing").is_none());
     }
 
     #[test]

@@ -3,7 +3,7 @@
 ## Unreleased
 
 - Added `SlashCommandScope` and `register_slash_commands(...)` for unified global/guild slash registration.
-- Extended `SlashCommandSet` ergonomics with scope-based `register[_ref]` plus standard `Extend`/`IntoIterator` support.
+- Extended `SlashCommandSet` ergonomics with scope-based `register[_ref]`, name-based upsert/remove (`set_command`, `with_set_command`, `remove`, `contains`), plus standard `Extend`/`IntoIterator` support.
 - Improved `InteractionRouter` robustness with per-kind fallback handlers (`*_fallback`).
 - Expanded tests and docs for the updated slash registration and interaction routing APIs.
 

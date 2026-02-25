@@ -83,7 +83,7 @@ use serenity::all::GuildId;
 use serenity::http::Http;
 
 async fn register(http: &Http, guild_id: GuildId) -> Result<(), discordrs::Error> {
-    let commands = SlashCommandSet::new()
+    let mut commands = SlashCommandSet::new()
         .with_command(
             SlashCommandBuilder::new("ping", "Latency check")
                 .dm_permission(false)
@@ -95,9 +95,14 @@ async fn register(http: &Http, guild_id: GuildId) -> Result<(), discordrs::Error
         )
         .with_commands(vec![SlashCommandBuilder::new("about", "About this bot")]);
 
+    // Name-based upsert/remove helpers for ergonomic command management
+    commands.set_command(SlashCommandBuilder::new("ping", "Updated latency check"));
+    let _removed = commands.remove("about");
+    assert!(commands.contains("ping"));
+
     // Non-consuming helpers (useful when you want to re-use the same set)
     let payload = commands.payload();
-    assert_eq!(payload.len(), 2);
+    assert_eq!(payload.len(), 1);
 
     // Unified scope-based registration API
     let _global = commands.register_ref(http, SlashCommandScope::Global).await?;
@@ -140,6 +145,7 @@ Routing rules:
 - If no exact match, prefix routes are checked.
 - Among prefixes, the longest matching prefix wins.
 - If no route matches, per-kind fallback handlers are used when configured.
+- Use `set_*` to upsert, `insert_*` to append, and `remove_*` to delete routes.
 - Convenience methods are available for each kind: `resolve_command`, `resolve_component`, `resolve_modal`. 
 
 ## Notes
