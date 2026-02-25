@@ -82,15 +82,17 @@ use serenity::all::GuildId;
 use serenity::http::Http;
 
 async fn register(http: &Http, guild_id: GuildId) -> Result<(), discordrs::Error> {
-    let commands = SlashCommandSet::new().with_command(
-        SlashCommandBuilder::new("ping", "Latency check")
-            .dm_permission(false)
-            .add_option(
-                CommandOptionBuilder::string("target", "who to ping")
-                    .required(true)
-                    .add_choice(CommandOptionChoice::string("all", "all")),
-            ),
-    );
+    let commands = SlashCommandSet::new()
+        .with_command(
+            SlashCommandBuilder::new("ping", "Latency check")
+                .dm_permission(false)
+                .add_option(
+                    CommandOptionBuilder::string("target", "who to ping")
+                        .required(true)
+                        .add_choice(CommandOptionChoice::string("all", "all")),
+                ),
+        )
+        .with_commands(vec![SlashCommandBuilder::new("about", "About this bot")]);
 
     // Global update (can take up to ~1 hour to propagate)
     let _global = commands.clone().register_global(http).await?;
@@ -115,16 +117,19 @@ let router = InteractionRouter::new()
     .on_modal_prefix("ticket_modal:", "ticket_modal_handler");
 
 // inside event handler:
-// if let Some(route) = dispatch_interaction(&router, &interaction) { ... }
-// if let Some(m) = dispatch_interaction_match(&router, &interaction) {
+// if let Some(route) = router.resolve_interaction(&interaction) { ... }
+// if let Some(m) = router.resolve_interaction_match(&interaction) {
 //     println!("matched {:?} by key {}", m.kind, m.key);
 // }
+// You can still use free functions:
+// dispatch_interaction(&router, &interaction)
 ```
 
 Routing rules:
 - Exact match wins first.
 - If no exact match, prefix routes are checked.
 - Among prefixes, the longest matching prefix wins.
+- Convenience methods are available for each kind: `resolve_command`, `resolve_component`, `resolve_modal`. 
 
 ## Notes
 

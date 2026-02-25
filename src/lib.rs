@@ -2114,8 +2114,23 @@ impl SlashCommandSet {
         self
     }
 
+    pub fn with_commands<I>(mut self, commands: I) -> Self
+    where
+        I: IntoIterator<Item = SlashCommandBuilder>,
+    {
+        self.commands.extend(commands);
+        self
+    }
+
     pub fn push(&mut self, command: SlashCommandBuilder) {
         self.commands.push(command);
+    }
+
+    pub fn extend<I>(&mut self, commands: I)
+    where
+        I: IntoIterator<Item = SlashCommandBuilder>,
+    {
+        self.commands.extend(commands);
     }
 
     pub fn clear(&mut self) {
@@ -2136,6 +2151,14 @@ impl SlashCommandSet {
         guild_id: serenity::GuildId,
     ) -> Result<Vec<serenity::Command>, Error> {
         register_guild_slash_commands(http, guild_id, self.commands).await
+    }
+}
+
+impl FromIterator<SlashCommandBuilder> for SlashCommandSet {
+    fn from_iter<T: IntoIterator<Item = SlashCommandBuilder>>(iter: T) -> Self {
+        Self {
+            commands: iter.into_iter().collect(),
+        }
     }
 }
 
@@ -2291,6 +2314,31 @@ impl<T> InteractionRouter<T> {
         self
     }
 
+    pub fn resolve_command(&self, name: &str) -> Option<&T> {
+        self.resolve(DispatchKind::Command, name)
+    }
+
+    pub fn resolve_component(&self, custom_id: &str) -> Option<&T> {
+        self.resolve(DispatchKind::Component, custom_id)
+    }
+
+    pub fn resolve_modal(&self, custom_id: &str) -> Option<&T> {
+        self.resolve(DispatchKind::Modal, custom_id)
+    }
+
+    pub fn resolve_interaction(&self, interaction: &serenity::Interaction) -> Option<&T> {
+        let (kind, key) = interaction_dispatch_key(interaction)?;
+        self.resolve(kind, key)
+    }
+
+    pub fn resolve_interaction_match<'a>(
+        &'a self,
+        interaction: &'a serenity::Interaction,
+    ) -> Option<DispatchMatch<'a, T>> {
+        let (kind, key) = interaction_dispatch_key(interaction)?;
+        self.resolve_match(kind, key)
+    }
+
     pub fn resolve(&self, kind: DispatchKind, key: &str) -> Option<&T> {
         self.resolve_route(kind, key).map(|route| &route.value)
     }
@@ -2350,16 +2398,14 @@ pub fn dispatch_interaction<'a, T>(
     router: &'a InteractionRouter<T>,
     interaction: &serenity::Interaction,
 ) -> Option<&'a T> {
-    let (kind, key) = interaction_dispatch_key(interaction)?;
-    router.resolve(kind, key)
+    router.resolve_interaction(interaction)
 }
 
 pub fn dispatch_interaction_match<'a, T>(
     router: &'a InteractionRouter<T>,
     interaction: &'a serenity::Interaction,
 ) -> Option<DispatchMatch<'a, T>> {
-    let (kind, key) = interaction_dispatch_key(interaction)?;
-    router.resolve_match(kind, key)
+    router.resolve_interaction_match(interaction)
 }
 
 pub mod channel_type {
@@ -2533,11 +2579,14 @@ mod tests {
 
         assert_eq!(router.len(), 3);
         assert_eq!(router.resolve(DispatchKind::Command, "ping"), Some(&1));
+        assert_eq!(router.resolve_command("ping"), Some(&1));
         assert_eq!(
             router.resolve(DispatchKind::Component, "ticket:new"),
             Some(&2)
         );
+        assert_eq!(router.resolve_component("ticket:new"), Some(&2));
         assert_eq!(router.resolve(DispatchKind::Modal, "prefs"), Some(&3));
+        assert_eq!(router.resolve_modal("prefs"), Some(&3));
 
         router.clear();
         assert!(router.is_empty());
@@ -2567,6 +2616,26 @@ mod tests {
 
         set.clear();
         assert!(set.is_empty());
+    }
+
+    #[test]
+    fn slash_command_set_supports_bulk_builders() {
+        let extras = vec![
+            SlashCommandBuilder::new("about", "About bot"),
+            SlashCommandBuilder::new("help", "Help"),
+        ];
+
+        let mut set = SlashCommandSet::new()
+            .with_command(SlashCommandBuilder::new("ping", "Latency check"))
+            .with_commands(extras.clone());
+
+        assert_eq!(set.len(), 3);
+
+        set.extend(vec![SlashCommandBuilder::new("echo", "Echo")]);
+        assert_eq!(set.len(), 4);
+
+        let from_iter: SlashCommandSet = extras.into_iter().collect();
+        assert_eq!(from_iter.len(), 2);
     }
 
     #[test]

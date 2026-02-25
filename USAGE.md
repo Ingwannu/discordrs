@@ -129,15 +129,17 @@ use serenity::all::GuildId;
 use serenity::http::Http;
 
 async fn register(http: &Http, guild_id: GuildId) -> Result<(), discordrs::Error> {
-    let commands = SlashCommandSet::new().with_command(
-        SlashCommandBuilder::new("ping", "지연 시간 확인")
-            .dm_permission(false)
-            .add_option(
-                CommandOptionBuilder::string("target", "대상")
-                    .required(true)
-                    .add_choice(CommandOptionChoice::string("전체", "all")),
-            ),
-    );
+    let commands = SlashCommandSet::new()
+        .with_command(
+            SlashCommandBuilder::new("ping", "지연 시간 확인")
+                .dm_permission(false)
+                .add_option(
+                    CommandOptionBuilder::string("target", "대상")
+                        .required(true)
+                        .add_choice(CommandOptionChoice::string("전체", "all")),
+                ),
+        )
+        .with_commands(vec![SlashCommandBuilder::new("about", "봇 정보")]);
 
     // 글로벌 반영(전파 지연 가능)
     let _ = commands.clone().register_global(http).await?;
@@ -159,7 +161,7 @@ router.insert_component_prefix("ticket:", "handle_ticket_component");
 router.insert_modal_prefix("ticket_modal:", "handle_ticket_modal");
 
 // event loop 내부
-// if let Some(route) = dispatch_interaction(&router, &interaction) {
+// if let Some(route) = router.resolve_interaction(&interaction) {
 //     match *route {
 //         "handle_ping" => { /* ... */ }
 //         "handle_ticket_component" => { /* ... */ }
@@ -167,15 +169,17 @@ router.insert_modal_prefix("ticket_modal:", "handle_ticket_modal");
 //         _ => {}
 //     }
 // }
-// if let Some(m) = dispatch_interaction_match(&router, &interaction) {
+// if let Some(m) = router.resolve_interaction_match(&interaction) {
 //     println!("matched {:?} by key {}", m.kind, m.key);
 // }
+// dispatch_interaction(&router, &interaction) / dispatch_interaction_match(...)도 계속 사용 가능
 ```
 
 라우팅 규칙:
 - exact(custom_id/command name) 우선
 - exact 미스 시 prefix 매칭
 - prefix가 여러 개면 **가장 긴 prefix** 우선
+- 타입별 헬퍼: `resolve_command`, `resolve_component`, `resolve_modal`
 
 ## 10) 참고
 
