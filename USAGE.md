@@ -1,4 +1,4 @@
-**# discordrs 사용법
+# discordrs 사용법
 
 `discordrs`는 serenity 기반 봇에서 **Discord Components V2**를 쉽게 쓰기 위한 라이브러리입니다.
 
@@ -197,12 +197,15 @@ router.set_component_fallback("handle_component_fallback");
 - 매칭 실패 시 타입별 fallback(`set_*_fallback`)이 있으면 fallback 사용
 - `set_*`은 upsert, `insert_*`는 추가, `remove_*`는 삭제
 - 타입별 헬퍼: `resolve_command`, `resolve_component`, `resolve_modal`
+- 공통 fallback 헬퍼: `set_fallback(kind, ...)`, `remove_fallback(kind)`, `has_fallback(kind)`
 
 `SlashCommandSet` 추가 유틸:
 - `names()`: 현재 명령어 이름을 삽입 순서대로 순회
 - `retain(...)`: 등록 전 조건에 맞는 명령어만 유지
+- `with_set_commands(...)` / `set_commands(...)`: 이름 기반 bulk upsert
+- `without("name")`, `remove_where(...)`: 등록 전 정리 작업을 간결하게 처리
 
 ## 10) 참고
 
 - `discordrs`는 serenity가 아직 완전 지원하지 않는 V2 컴포넌트를 **raw HTTP payload**로 전송합니다.
-- 버튼/셀렉트의 `custom_id`는 핸들러 라우팅 규칙과 반드시 일치시켜야 합니다.**
+- 버튼/셀렉트의 `custom_id`는 핸들러 라우팅 규칙과 반드시 일치시켜야 합니다.

@@ -2153,6 +2153,25 @@ impl SlashCommandSet {
         self
     }
 
+    /// Upsert all commands by name, preserving insertion order for newly added commands.
+    pub fn set_commands<I>(&mut self, commands: I)
+    where
+        I: IntoIterator<Item = SlashCommandBuilder>,
+    {
+        for command in commands {
+            self.set_command(command);
+        }
+    }
+
+    /// Builder-style bulk upsert by command name.
+    pub fn with_set_commands<I>(mut self, commands: I) -> Self
+    where
+        I: IntoIterator<Item = SlashCommandBuilder>,
+    {
+        self.set_commands(commands);
+        self
+    }
+
     pub fn extend<I>(&mut self, commands: I)
     where
         I: IntoIterator<Item = SlashCommandBuilder>,
@@ -2191,6 +2210,24 @@ impl SlashCommandSet {
             .iter()
             .position(|command| command.name() == name)?;
         Some(self.commands.remove(index))
+    }
+
+    /// Builder-style remove by command name.
+    pub fn without(mut self, name: &str) -> Self {
+        self.remove(name);
+        self
+    }
+
+    /// Remove all commands matching the predicate.
+    ///
+    /// Returns the number of removed commands.
+    pub fn remove_where<F>(&mut self, mut predicate: F) -> usize
+    where
+        F: FnMut(&SlashCommandBuilder) -> bool,
+    {
+        let before = self.commands.len();
+        self.commands.retain(|command| !predicate(command));
+        before.saturating_sub(self.commands.len())
     }
 
     /// Build a bulk-overwrite payload while keeping this set intact.
@@ -2645,6 +2682,35 @@ impl<T> InteractionRouter<T> {
         self
     }
 
+    /// Set fallback handler for the given interaction kind.
+    ///
+    /// Returns the previous fallback if it existed.
+    pub fn set_fallback(&mut self, kind: DispatchKind, value: T) -> Option<T> {
+        match kind {
+            DispatchKind::Command => self.command_fallback.replace(value),
+            DispatchKind::Component => self.component_fallback.replace(value),
+            DispatchKind::Modal => self.modal_fallback.replace(value),
+        }
+    }
+
+    /// Remove fallback handler for the given interaction kind.
+    pub fn remove_fallback(&mut self, kind: DispatchKind) -> Option<T> {
+        match kind {
+            DispatchKind::Command => self.command_fallback.take(),
+            DispatchKind::Component => self.component_fallback.take(),
+            DispatchKind::Modal => self.modal_fallback.take(),
+        }
+    }
+
+    /// Check whether a fallback handler exists for the given interaction kind.
+    pub fn has_fallback(&self, kind: DispatchKind) -> bool {
+        match kind {
+            DispatchKind::Command => self.command_fallback.is_some(),
+            DispatchKind::Component => self.component_fallback.is_some(),
+            DispatchKind::Modal => self.modal_fallback.is_some(),
+        }
+    }
+
     pub fn resolve_command(&self, name: &str) -> Option<&T> {
         self.resolve(DispatchKind::Command, name)
     }
@@ -3078,6 +3144,42 @@ mod tests {
     }
 
     #[test]
+    fn slash_command_set_bulk_upsert_and_builder_remove_are_ergonomic() {
+        let set = SlashCommandSet::new()
+            .with_command(SlashCommandBuilder::new("ping", "Latency"))
+            .with_command(SlashCommandBuilder::new("echo", "Echo"))
+            .with_set_commands([
+                SlashCommandBuilder::new("ping", "Latency updated"),
+                SlashCommandBuilder::new("about", "About"),
+            ])
+            .without("echo");
+
+        assert_eq!(set.len(), 2);
+        assert!(set.contains("ping"));
+        assert!(set.contains("about"));
+        assert!(!set.contains("echo"));
+
+        let payload = set.payload();
+        assert_eq!(payload[0].get("name").and_then(Value::as_str), Some("ping"));
+        assert_eq!(
+            payload[0].get("description").and_then(Value::as_str),
+            Some("Latency updated")
+        );
+    }
+
+    #[test]
+    fn slash_command_set_remove_where_reports_removed_count() {
+        let mut set = SlashCommandSet::new()
+            .with_command(SlashCommandBuilder::new("ping", "Latency"))
+            .with_command(SlashCommandBuilder::new("admin-ban", "Ban"))
+            .with_command(SlashCommandBuilder::new("admin-kick", "Kick"));
+
+        let removed = set.remove_where(|command| command.name().starts_with("admin-"));
+        assert_eq!(removed, 2);
+        assert_eq!(set.names().collect::<Vec<_>>(), vec!["ping"]);
+    }
+
+    #[test]
     fn slash_command_scope_is_copy_and_eq() {
         let guild_id = serenity::GuildId::new(42);
         assert_eq!(SlashCommandScope::Global, SlashCommandScope::Global);
@@ -3174,6 +3276,29 @@ mod tests {
         assert!(router.is_empty());
         assert!(!router.has_command_fallback());
         assert!(!router.has_modal_fallback());
+    }
+
+    #[test]
+    fn interaction_router_generic_fallback_helpers_work_for_all_kinds() {
+        let mut router = InteractionRouter::new();
+
+        assert!(!router.has_fallback(DispatchKind::Command));
+        assert_eq!(router.set_fallback(DispatchKind::Command, 1), None);
+        assert!(router.has_fallback(DispatchKind::Command));
+        assert_eq!(router.resolve(DispatchKind::Command, "missing"), Some(&1));
+
+        assert_eq!(router.set_fallback(DispatchKind::Command, 2), Some(1));
+        assert_eq!(router.resolve(DispatchKind::Command, "missing"), Some(&2));
+
+        assert_eq!(router.set_fallback(DispatchKind::Component, 10), None);
+        assert_eq!(
+            router.resolve(DispatchKind::Component, "missing"),
+            Some(&10)
+        );
+
+        assert_eq!(router.remove_fallback(DispatchKind::Command), Some(2));
+        assert!(!router.has_fallback(DispatchKind::Command));
+        assert_eq!(router.resolve(DispatchKind::Command, "missing"), None);
     }
 
     #[test]
