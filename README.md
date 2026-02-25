@@ -144,9 +144,14 @@ Routing rules:
 - Exact match wins first.
 - If no exact match, prefix routes are checked.
 - Among prefixes, the longest matching prefix wins.
+- If specificity ties (same exact key or same prefix length), the latest inserted route wins.
 - If no route matches, per-kind fallback handlers are used when configured.
 - Use `set_*` to upsert, `insert_*` to append, and `remove_*` to delete routes.
-- Convenience methods are available for each kind: `resolve_command`, `resolve_component`, `resolve_modal`. 
+- Convenience methods are available for each kind: `resolve_command`, `resolve_component`, `resolve_modal`.
+
+For slash command collection ergonomics, `SlashCommandSet` also supports:
+- `names()` to iterate command names in insertion order
+- `retain(...)` to filter commands in place before registration
 
 ## Notes
 

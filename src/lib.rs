@@ -2164,6 +2164,19 @@ impl SlashCommandSet {
         self.commands.clear();
     }
 
+    /// Iterate command names in insertion order.
+    pub fn names(&self) -> impl Iterator<Item = &str> {
+        self.commands.iter().map(SlashCommandBuilder::name)
+    }
+
+    /// Retain only commands that satisfy the predicate.
+    pub fn retain<F>(&mut self, mut keep: F)
+    where
+        F: FnMut(&SlashCommandBuilder) -> bool,
+    {
+        self.commands.retain(|command| keep(command));
+    }
+
     /// Check if a command with this name exists.
     pub fn contains(&self, name: &str) -> bool {
         self.commands.iter().any(|command| command.name() == name)
@@ -2701,7 +2714,7 @@ impl<T> InteractionRouter<T> {
     }
 
     fn resolve_route(&self, kind: DispatchKind, key: &str) -> Option<&Route<T>> {
-        let exact = self.routes.iter().find(|route| {
+        let exact = self.routes.iter().rfind(|route| {
             route.kind == kind
                 && matches!(&route.pattern, RoutePattern::Exact(exact) if exact == key)
         });
@@ -2711,14 +2724,17 @@ impl<T> InteractionRouter<T> {
 
         self.routes
             .iter()
+            .enumerate()
             .filter(|route| {
-                route.kind == kind
-                    && matches!(&route.pattern, RoutePattern::Prefix(prefix) if key.starts_with(prefix))
+                route.1.kind == kind
+                    && matches!(&route.1.pattern, RoutePattern::Prefix(prefix) if key.starts_with(prefix))
             })
-            .max_by_key(|route| match &route.pattern {
-                RoutePattern::Prefix(prefix) => prefix.len(),
-                RoutePattern::Exact(_) => 0,
+            // Prefer the longest prefix; for ties, prefer the most recently inserted route.
+            .max_by_key(|(index, route)| match &route.pattern {
+                RoutePattern::Prefix(prefix) => (prefix.len(), *index),
+                RoutePattern::Exact(_) => (0, *index),
             })
+            .map(|(_, route)| route)
     }
 }
 
@@ -3024,6 +3040,20 @@ mod tests {
     }
 
     #[test]
+    fn slash_command_set_names_and_retain_are_ergonomic() {
+        let mut set = SlashCommandSet::new()
+            .with_command(SlashCommandBuilder::new("ping", "Latency"))
+            .with_command(SlashCommandBuilder::new("echo", "Echo"))
+            .with_command(SlashCommandBuilder::new("admin-ban", "Ban member"));
+
+        let names = set.names().collect::<Vec<_>>();
+        assert_eq!(names, vec!["ping", "echo", "admin-ban"]);
+
+        set.retain(|command| !command.name().starts_with("admin-"));
+        assert_eq!(set.names().collect::<Vec<_>>(), vec!["ping", "echo"]);
+    }
+
+    #[test]
     fn slash_command_set_supports_std_extend_and_into_iter() {
         let mut set = SlashCommandSet::new();
         set.extend([
@@ -3083,6 +3113,20 @@ mod tests {
         assert_eq!(router.resolve_modal("prefs:general"), Some(&41));
 
         assert_eq!(router.len(), 5);
+    }
+
+    #[test]
+    fn interaction_router_prefers_latest_route_for_same_specificity() {
+        let mut router = InteractionRouter::new();
+
+        router.insert_command("ping", 1);
+        router.insert_command("ping", 2); // same exact key, inserted later
+
+        router.insert_component_prefix("ticket:", 10);
+        router.insert_component_prefix("ticket:", 11); // same prefix length, inserted later
+
+        assert_eq!(router.resolve_command("ping"), Some(&2));
+        assert_eq!(router.resolve_component("ticket:new"), Some(&11));
     }
 
     #[test]

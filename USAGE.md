@@ -193,9 +193,14 @@ router.set_component_fallback("handle_component_fallback");
 - exact(custom_id/command name) 우선
 - exact 미스 시 prefix 매칭
 - prefix가 여러 개면 **가장 긴 prefix** 우선
+- 동일 우선순위(같은 exact 키 / 같은 prefix 길이)면 **나중에 insert된 라우트** 우선
 - 매칭 실패 시 타입별 fallback(`set_*_fallback`)이 있으면 fallback 사용
 - `set_*`은 upsert, `insert_*`는 추가, `remove_*`는 삭제
 - 타입별 헬퍼: `resolve_command`, `resolve_component`, `resolve_modal`
+
+`SlashCommandSet` 추가 유틸:
+- `names()`: 현재 명령어 이름을 삽입 순서대로 순회
+- `retain(...)`: 등록 전 조건에 맞는 명령어만 유지
 
 ## 10) 참고
 
