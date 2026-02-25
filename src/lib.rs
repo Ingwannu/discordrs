@@ -2088,6 +2088,57 @@ impl SlashCommandBuilder {
     }
 }
 
+/// Ergonomic collection builder for slash command registration.
+#[derive(Clone, Default)]
+pub struct SlashCommandSet {
+    commands: Vec<SlashCommandBuilder>,
+}
+
+impl SlashCommandSet {
+    pub fn new() -> Self {
+        Self {
+            commands: Vec::new(),
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        self.commands.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.commands.is_empty()
+    }
+
+    pub fn with_command(mut self, command: SlashCommandBuilder) -> Self {
+        self.commands.push(command);
+        self
+    }
+
+    pub fn push(&mut self, command: SlashCommandBuilder) {
+        self.commands.push(command);
+    }
+
+    pub fn clear(&mut self) {
+        self.commands.clear();
+    }
+
+    pub fn into_payload(self) -> Vec<Value> {
+        slash_command_registration_payload(self.commands)
+    }
+
+    pub async fn register_global(self, http: &Http) -> Result<Vec<serenity::Command>, Error> {
+        register_global_slash_commands(http, self.commands).await
+    }
+
+    pub async fn register_guild(
+        self,
+        http: &Http,
+        guild_id: serenity::GuildId,
+    ) -> Result<Vec<serenity::Command>, Error> {
+        register_guild_slash_commands(http, guild_id, self.commands).await
+    }
+}
+
 /// Bulk overwrite payload for global/guild slash command registration.
 pub fn slash_command_registration_payload(commands: Vec<SlashCommandBuilder>) -> Vec<Value> {
     commands
@@ -2139,6 +2190,12 @@ struct Route<T> {
     kind: DispatchKind,
     pattern: RoutePattern,
     value: T,
+}
+
+pub struct DispatchMatch<'a, T> {
+    pub kind: DispatchKind,
+    pub key: &'a str,
+    pub value: &'a T,
 }
 
 /// Simple route table for command/component/modal dispatch.
@@ -2238,6 +2295,18 @@ impl<T> InteractionRouter<T> {
         self.resolve_route(kind, key).map(|route| &route.value)
     }
 
+    pub fn resolve_match<'a>(
+        &'a self,
+        kind: DispatchKind,
+        key: &'a str,
+    ) -> Option<DispatchMatch<'a, T>> {
+        self.resolve_route(kind, key).map(|route| DispatchMatch {
+            kind,
+            key,
+            value: &route.value,
+        })
+    }
+
     fn resolve_route(&self, kind: DispatchKind, key: &str) -> Option<&Route<T>> {
         let exact = self.routes.iter().find(|route| {
             route.kind == kind
@@ -2284,6 +2353,15 @@ pub fn dispatch_interaction<'a, T>(
     let (kind, key) = interaction_dispatch_key(interaction)?;
     router.resolve(kind, key)
 }
+
+pub fn dispatch_interaction_match<'a, T>(
+    router: &'a InteractionRouter<T>,
+    interaction: &'a serenity::Interaction,
+) -> Option<DispatchMatch<'a, T>> {
+    let (kind, key) = interaction_dispatch_key(interaction)?;
+    router.resolve_match(kind, key)
+}
+
 pub mod channel_type {
     pub const GUILD_TEXT: u8 = 0;
     pub const DM: u8 = 1;
@@ -2469,5 +2547,46 @@ mod tests {
     fn slash_registration_payload_empty_is_valid() {
         let payload = slash_command_registration_payload(vec![]);
         assert!(payload.is_empty());
+    }
+
+    #[test]
+    fn slash_command_set_builds_payload_and_supports_clear() {
+        let mut set = SlashCommandSet::new()
+            .with_command(SlashCommandBuilder::new("ping", "Latency check"))
+            .with_command(SlashCommandBuilder::new("echo", "Echo input"));
+
+        assert_eq!(set.len(), 2);
+        assert!(!set.is_empty());
+
+        set.push(SlashCommandBuilder::new("about", "About bot"));
+        assert_eq!(set.len(), 3);
+
+        let payload = set.clone().into_payload();
+        assert_eq!(payload.len(), 3);
+        assert_eq!(payload[0].get("name").and_then(Value::as_str), Some("ping"));
+
+        set.clear();
+        assert!(set.is_empty());
+    }
+
+    #[test]
+    fn interaction_router_resolve_match_keeps_kind_and_key() {
+        let router = InteractionRouter::new()
+            .on_command("ping", 10)
+            .on_modal_prefix("prefs:", 20);
+
+        let command = router
+            .resolve_match(DispatchKind::Command, "ping")
+            .expect("command route");
+        assert_eq!(command.kind, DispatchKind::Command);
+        assert_eq!(command.key, "ping");
+        assert_eq!(*command.value, 10);
+
+        let modal = router
+            .resolve_match(DispatchKind::Modal, "prefs:general")
+            .expect("modal route");
+        assert_eq!(modal.kind, DispatchKind::Modal);
+        assert_eq!(modal.key, "prefs:general");
+        assert_eq!(*modal.value, 20);
     }
 }

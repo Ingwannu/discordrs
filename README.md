@@ -76,14 +76,13 @@ async fn send_panel(http: &Http, channel_id: ChannelId) -> Result<(), Box<dyn st
 
 ```rust
 use discordrs::{
-    register_guild_slash_commands, register_global_slash_commands,
-    CommandOptionBuilder, CommandOptionChoice, SlashCommandBuilder,
+    CommandOptionBuilder, CommandOptionChoice, SlashCommandBuilder, SlashCommandSet,
 };
 use serenity::all::GuildId;
 use serenity::http::Http;
 
 async fn register(http: &Http, guild_id: GuildId) -> Result<(), discordrs::Error> {
-    let commands = vec![
+    let commands = SlashCommandSet::new().with_command(
         SlashCommandBuilder::new("ping", "Latency check")
             .dm_permission(false)
             .add_option(
@@ -91,13 +90,13 @@ async fn register(http: &Http, guild_id: GuildId) -> Result<(), discordrs::Error
                     .required(true)
                     .add_choice(CommandOptionChoice::string("all", "all")),
             ),
-    ];
+    );
 
     // Global update (can take up to ~1 hour to propagate)
-    let _global = register_global_slash_commands(http, commands.clone()).await?;
+    let _global = commands.clone().register_global(http).await?;
 
     // Guild update (usually near-immediate)
-    let _guild = register_guild_slash_commands(http, guild_id, commands).await?;
+    let _guild = commands.register_guild(http, guild_id).await?;
     Ok(())
 }
 ```
@@ -108,7 +107,7 @@ Use `InteractionRouter` for ergonomic routing by slash command name, component `
 You can either chain with `on_*` or mutate with `insert_*` methods.
 
 ```rust
-use discordrs::{dispatch_interaction, InteractionRouter};
+use discordrs::{dispatch_interaction, dispatch_interaction_match, InteractionRouter};
 
 let router = InteractionRouter::new()
     .on_command("ping", "ping_handler")
@@ -117,6 +116,9 @@ let router = InteractionRouter::new()
 
 // inside event handler:
 // if let Some(route) = dispatch_interaction(&router, &interaction) { ... }
+// if let Some(m) = dispatch_interaction_match(&router, &interaction) {
+//     println!("matched {:?} by key {}", m.kind, m.key);
+// }
 ```
 
 Routing rules:

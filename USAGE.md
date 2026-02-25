@@ -123,14 +123,13 @@ let modal = ModalBuilder::new("preferences_modal", "Preferences")
 
 ```rust
 use discordrs::{
-    register_guild_slash_commands, register_global_slash_commands,
-    CommandOptionBuilder, CommandOptionChoice, SlashCommandBuilder,
+    CommandOptionBuilder, CommandOptionChoice, SlashCommandBuilder, SlashCommandSet,
 };
 use serenity::all::GuildId;
 use serenity::http::Http;
 
 async fn register(http: &Http, guild_id: GuildId) -> Result<(), discordrs::Error> {
-    let commands = vec![
+    let commands = SlashCommandSet::new().with_command(
         SlashCommandBuilder::new("ping", "지연 시간 확인")
             .dm_permission(false)
             .add_option(
@@ -138,13 +137,13 @@ async fn register(http: &Http, guild_id: GuildId) -> Result<(), discordrs::Error
                     .required(true)
                     .add_choice(CommandOptionChoice::string("전체", "all")),
             ),
-    ];
+    );
 
     // 글로벌 반영(전파 지연 가능)
-    let _ = register_global_slash_commands(http, commands.clone()).await?;
+    let _ = commands.clone().register_global(http).await?;
 
     // 길드 반영(보통 빠름)
-    let _ = register_guild_slash_commands(http, guild_id, commands).await?;
+    let _ = commands.register_guild(http, guild_id).await?;
     Ok(())
 }
 ```
@@ -152,7 +151,7 @@ async fn register(http: &Http, guild_id: GuildId) -> Result<(), discordrs::Error
 ## 9) Interaction 디스패치 헬퍼
 
 ```rust
-use discordrs::{dispatch_interaction, InteractionRouter};
+use discordrs::{dispatch_interaction, dispatch_interaction_match, InteractionRouter};
 
 let mut router = InteractionRouter::new();
 router.insert_command("ping", "handle_ping");
@@ -167,6 +166,9 @@ router.insert_modal_prefix("ticket_modal:", "handle_ticket_modal");
 //         "handle_ticket_modal" => { /* ... */ }
 //         _ => {}
 //     }
+// }
+// if let Some(m) = dispatch_interaction_match(&router, &interaction) {
+//     println!("matched {:?} by key {}", m.kind, m.key);
 // }
 ```
 
