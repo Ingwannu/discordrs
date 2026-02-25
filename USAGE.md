@@ -172,6 +172,8 @@ router.insert_modal_prefix("ticket_modal:", "handle_ticket_modal");
 // if let Some(m) = router.resolve_interaction_match(&interaction) {
 //     println!("matched {:?} by key {}", m.kind, m.key);
 // }
+// router.set_component_prefix("ticket:", "new_ticket_component_handler");
+// router.remove_modal("ticket_modal:legacy");
 // dispatch_interaction(&router, &interaction) / dispatch_interaction_match(...)도 계속 사용 가능
 ```
 

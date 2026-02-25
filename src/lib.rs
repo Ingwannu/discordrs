@@ -2202,7 +2202,7 @@ pub enum DispatchKind {
     Modal,
 }
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq)]
 enum RoutePattern {
     Exact(String),
     Prefix(String),
@@ -2222,6 +2222,10 @@ pub struct DispatchMatch<'a, T> {
 }
 
 /// Simple route table for command/component/modal dispatch.
+///
+/// - `insert_*`: append routes without replacing existing ones.
+/// - `set_*`: upsert (replace same kind+pattern route if it exists).
+/// - `remove_*`: remove exact kind+pattern routes.
 pub struct InteractionRouter<T> {
     routes: Vec<Route<T>>,
 }
@@ -2233,6 +2237,40 @@ impl<T> Default for InteractionRouter<T> {
 }
 
 impl<T> InteractionRouter<T> {
+    fn push_route(&mut self, kind: DispatchKind, pattern: RoutePattern, value: T) {
+        self.routes.push(Route {
+            kind,
+            pattern,
+            value,
+        });
+    }
+
+    fn set_route(&mut self, kind: DispatchKind, pattern: RoutePattern, value: T) {
+        if let Some(route) = self
+            .routes
+            .iter_mut()
+            .find(|route| route.kind == kind && route.pattern == pattern)
+        {
+            route.value = value;
+            return;
+        }
+
+        self.push_route(kind, pattern, value);
+    }
+
+    fn remove_route(&mut self, kind: DispatchKind, pattern: RoutePattern) -> bool {
+        if let Some(idx) = self
+            .routes
+            .iter()
+            .position(|route| route.kind == kind && route.pattern == pattern)
+        {
+            self.routes.remove(idx);
+            true
+        } else {
+            false
+        }
+    }
+
     pub fn new() -> Self {
         Self { routes: Vec::new() }
     }
@@ -2250,11 +2288,23 @@ impl<T> InteractionRouter<T> {
     }
 
     pub fn insert_command(&mut self, name: &str, value: T) {
-        self.routes.push(Route {
-            kind: DispatchKind::Command,
-            pattern: RoutePattern::Exact(name.to_string()),
+        self.push_route(
+            DispatchKind::Command,
+            RoutePattern::Exact(name.to_string()),
             value,
-        });
+        );
+    }
+
+    pub fn set_command(&mut self, name: &str, value: T) {
+        self.set_route(
+            DispatchKind::Command,
+            RoutePattern::Exact(name.to_string()),
+            value,
+        );
+    }
+
+    pub fn remove_command(&mut self, name: &str) -> bool {
+        self.remove_route(DispatchKind::Command, RoutePattern::Exact(name.to_string()))
     }
 
     pub fn on_command(mut self, name: &str, value: T) -> Self {
@@ -2263,11 +2313,26 @@ impl<T> InteractionRouter<T> {
     }
 
     pub fn insert_component(&mut self, custom_id: &str, value: T) {
-        self.routes.push(Route {
-            kind: DispatchKind::Component,
-            pattern: RoutePattern::Exact(custom_id.to_string()),
+        self.push_route(
+            DispatchKind::Component,
+            RoutePattern::Exact(custom_id.to_string()),
             value,
-        });
+        );
+    }
+
+    pub fn set_component(&mut self, custom_id: &str, value: T) {
+        self.set_route(
+            DispatchKind::Component,
+            RoutePattern::Exact(custom_id.to_string()),
+            value,
+        );
+    }
+
+    pub fn remove_component(&mut self, custom_id: &str) -> bool {
+        self.remove_route(
+            DispatchKind::Component,
+            RoutePattern::Exact(custom_id.to_string()),
+        )
     }
 
     pub fn on_component(mut self, custom_id: &str, value: T) -> Self {
@@ -2276,11 +2341,26 @@ impl<T> InteractionRouter<T> {
     }
 
     pub fn insert_component_prefix(&mut self, prefix: &str, value: T) {
-        self.routes.push(Route {
-            kind: DispatchKind::Component,
-            pattern: RoutePattern::Prefix(prefix.to_string()),
+        self.push_route(
+            DispatchKind::Component,
+            RoutePattern::Prefix(prefix.to_string()),
             value,
-        });
+        );
+    }
+
+    pub fn set_component_prefix(&mut self, prefix: &str, value: T) {
+        self.set_route(
+            DispatchKind::Component,
+            RoutePattern::Prefix(prefix.to_string()),
+            value,
+        );
+    }
+
+    pub fn remove_component_prefix(&mut self, prefix: &str) -> bool {
+        self.remove_route(
+            DispatchKind::Component,
+            RoutePattern::Prefix(prefix.to_string()),
+        )
     }
 
     pub fn on_component_prefix(mut self, prefix: &str, value: T) -> Self {
@@ -2289,11 +2369,26 @@ impl<T> InteractionRouter<T> {
     }
 
     pub fn insert_modal(&mut self, custom_id: &str, value: T) {
-        self.routes.push(Route {
-            kind: DispatchKind::Modal,
-            pattern: RoutePattern::Exact(custom_id.to_string()),
+        self.push_route(
+            DispatchKind::Modal,
+            RoutePattern::Exact(custom_id.to_string()),
             value,
-        });
+        );
+    }
+
+    pub fn set_modal(&mut self, custom_id: &str, value: T) {
+        self.set_route(
+            DispatchKind::Modal,
+            RoutePattern::Exact(custom_id.to_string()),
+            value,
+        );
+    }
+
+    pub fn remove_modal(&mut self, custom_id: &str) -> bool {
+        self.remove_route(
+            DispatchKind::Modal,
+            RoutePattern::Exact(custom_id.to_string()),
+        )
     }
 
     pub fn on_modal(mut self, custom_id: &str, value: T) -> Self {
@@ -2302,11 +2397,26 @@ impl<T> InteractionRouter<T> {
     }
 
     pub fn insert_modal_prefix(&mut self, prefix: &str, value: T) {
-        self.routes.push(Route {
-            kind: DispatchKind::Modal,
-            pattern: RoutePattern::Prefix(prefix.to_string()),
+        self.push_route(
+            DispatchKind::Modal,
+            RoutePattern::Prefix(prefix.to_string()),
             value,
-        });
+        );
+    }
+
+    pub fn set_modal_prefix(&mut self, prefix: &str, value: T) {
+        self.set_route(
+            DispatchKind::Modal,
+            RoutePattern::Prefix(prefix.to_string()),
+            value,
+        );
+    }
+
+    pub fn remove_modal_prefix(&mut self, prefix: &str) -> bool {
+        self.remove_route(
+            DispatchKind::Modal,
+            RoutePattern::Prefix(prefix.to_string()),
+        )
     }
 
     pub fn on_modal_prefix(mut self, prefix: &str, value: T) -> Self {
@@ -2636,6 +2746,53 @@ mod tests {
 
         let from_iter: SlashCommandSet = extras.into_iter().collect();
         assert_eq!(from_iter.len(), 2);
+    }
+
+    #[test]
+    fn interaction_router_set_methods_upsert_existing_routes() {
+        let mut router = InteractionRouter::new();
+
+        router.insert_command("ping", 1);
+        router.set_command("ping", 2);
+
+        router.insert_component("ticket:open", 10);
+        router.set_component("ticket:open", 11);
+
+        router.insert_component_prefix("ticket:", 20);
+        router.set_component_prefix("ticket:", 21);
+
+        router.insert_modal("prefs", 30);
+        router.set_modal("prefs", 31);
+
+        router.insert_modal_prefix("prefs:", 40);
+        router.set_modal_prefix("prefs:", 41);
+
+        assert_eq!(router.resolve_command("ping"), Some(&2));
+        assert_eq!(router.resolve_component("ticket:open"), Some(&11));
+        assert_eq!(router.resolve_component("ticket:new"), Some(&21));
+        assert_eq!(router.resolve_modal("prefs"), Some(&31));
+        assert_eq!(router.resolve_modal("prefs:general"), Some(&41));
+
+        assert_eq!(router.len(), 5);
+    }
+
+    #[test]
+    fn interaction_router_remove_methods_delete_matching_routes() {
+        let mut router = InteractionRouter::new()
+            .on_command("ping", 1)
+            .on_component("ticket:open", 2)
+            .on_component_prefix("ticket:", 3)
+            .on_modal("prefs", 4)
+            .on_modal_prefix("prefs:", 5);
+
+        assert!(router.remove_command("ping"));
+        assert!(router.remove_component("ticket:open"));
+        assert!(router.remove_component_prefix("ticket:"));
+        assert!(router.remove_modal("prefs"));
+        assert!(router.remove_modal_prefix("prefs:"));
+
+        assert!(!router.remove_command("ping"));
+        assert!(router.is_empty());
     }
 
     #[test]

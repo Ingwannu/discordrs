@@ -107,6 +107,7 @@ async fn register(http: &Http, guild_id: GuildId) -> Result<(), discordrs::Error
 
 Use `InteractionRouter` for ergonomic routing by slash command name, component `custom_id`, or prefix patterns.
 You can either chain with `on_*` or mutate with `insert_*` methods.
+Need upsert/removal semantics? use `set_*` and `remove_*` helpers.
 
 ```rust
 use discordrs::{dispatch_interaction, dispatch_interaction_match, InteractionRouter};
@@ -122,6 +123,8 @@ let router = InteractionRouter::new()
 //     println!("matched {:?} by key {}", m.kind, m.key);
 // }
 // You can still use free functions:
+// router.set_component_prefix("ticket:", "new_ticket_component_handler");
+// router.remove_modal("ticket_modal:legacy");
 // dispatch_interaction(&router, &interaction)
 ```
 
