@@ -108,6 +108,15 @@ async fn register(http: &Http, guild_id: GuildId) -> Result<(), discordrs::Error
     let _guild = commands
         .register_ref(http, SlashCommandScope::Guild(guild_id))
         .await?;
+
+    // Register to multiple scopes with one call
+    let registered = commands
+        .register_many_ref(
+            http,
+            [SlashCommandScope::Global, SlashCommandScope::Guild(guild_id)],
+        )
+        .await?;
+    assert_eq!(registered.len(), 2);
     Ok(())
 }
 ```
@@ -151,6 +160,7 @@ Routing rules:
 - Generic fallback helpers are available too: `set_fallback(kind, ...)`, `remove_fallback(kind)`, `has_fallback(kind)`.
 - Generic exact-route helpers are available too: `insert(kind, key, ...)`, `set(kind, key, ...)`, `remove(kind, key)`, `contains(kind, key)`.
 - Generic prefix-route helpers are available too: `insert_prefix(kind, ...)`, `set_prefix(kind, ...)`, `remove_prefix(kind, ...)`.
+- Per-kind route housekeeping helpers: `len_for(kind)`, `has_routes_for(kind)`, `clear_kind(kind)`.
 
 For slash command collection ergonomics, `SlashCommandSet` also supports:
 - `slash_commands![ ... ]` macro for concise set construction
@@ -161,6 +171,7 @@ For slash command collection ergonomics, `SlashCommandSet` also supports:
 - `merge(...)` / `with_merged(...)` to upsert from another `SlashCommandSet`
 - `dedup_by_name()` to keep the latest command for duplicate names
 - `without("name")` and `remove_where(...)` for concise pre-registration pruning
+- `register_many_ref(...)` / `register_many(...)` for multi-scope registration in a single call
 
 ## Notes
 

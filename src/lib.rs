@@ -2338,6 +2338,32 @@ impl SlashCommandSet {
     ) -> Result<Vec<serenity::Command>, Error> {
         register_slash_commands(http, scope, self.commands.clone()).await
     }
+
+    /// Register the same command set in multiple scopes.
+    ///
+    /// Returns one entry per scope in the same order as requested.
+    pub async fn register_many_ref<I>(
+        &self,
+        http: &Http,
+        scopes: I,
+    ) -> Result<Vec<(SlashCommandScope, Vec<serenity::Command>)>, Error>
+    where
+        I: IntoIterator<Item = SlashCommandScope>,
+    {
+        register_slash_commands_many(http, scopes, self.commands.clone()).await
+    }
+
+    /// Register the same command set in multiple scopes, consuming this set.
+    pub async fn register_many<I>(
+        self,
+        http: &Http,
+        scopes: I,
+    ) -> Result<Vec<(SlashCommandScope, Vec<serenity::Command>)>, Error>
+    where
+        I: IntoIterator<Item = SlashCommandScope>,
+    {
+        register_slash_commands_many(http, scopes, self.commands).await
+    }
 }
 
 impl From<Vec<SlashCommandBuilder>> for SlashCommandSet {
@@ -2467,6 +2493,29 @@ where
     }
 }
 
+/// Register one command payload into multiple scopes in sequence.
+///
+/// Returns `(scope, created_commands)` pairs in the same order as input `scopes`.
+pub async fn register_slash_commands_many<I, J>(
+    http: &Http,
+    scopes: I,
+    commands: J,
+) -> Result<Vec<(SlashCommandScope, Vec<serenity::Command>)>, Error>
+where
+    I: IntoIterator<Item = SlashCommandScope>,
+    J: IntoIterator<Item = SlashCommandBuilder>,
+{
+    let commands = commands.into_iter().collect::<Vec<_>>();
+    let mut results = Vec::new();
+
+    for scope in scopes {
+        let created = register_slash_commands(http, scope, commands.clone()).await?;
+        results.push((scope, created));
+    }
+
+    Ok(results)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DispatchKind {
     Command,
@@ -2561,6 +2610,28 @@ impl<T> InteractionRouter<T> {
 
     pub fn is_empty(&self) -> bool {
         self.routes.is_empty()
+    }
+
+    /// Number of registered routes for a specific interaction kind.
+    pub fn len_for(&self, kind: DispatchKind) -> usize {
+        self.routes
+            .iter()
+            .filter(|route| route.kind == kind)
+            .count()
+    }
+
+    /// Returns true when at least one route exists for the interaction kind.
+    pub fn has_routes_for(&self, kind: DispatchKind) -> bool {
+        self.routes.iter().any(|route| route.kind == kind)
+    }
+
+    /// Remove all routes for the given interaction kind.
+    ///
+    /// Returns the number of removed routes.
+    pub fn clear_kind(&mut self, kind: DispatchKind) -> usize {
+        let before = self.routes.len();
+        self.routes.retain(|route| route.kind != kind);
+        before.saturating_sub(self.routes.len())
     }
 
     pub fn clear(&mut self) {
@@ -3502,6 +3573,25 @@ mod tests {
 
         assert!(router.remove(DispatchKind::Modal, "prefs"));
         assert!(!router.remove(DispatchKind::Modal, "prefs"));
+    }
+
+    #[test]
+    fn interaction_router_len_for_and_clear_kind_are_ergonomic() {
+        let mut router = InteractionRouter::new()
+            .on_command("ping", 1)
+            .on_command("echo", 2)
+            .on_component_prefix("ticket:", 10)
+            .on_modal("prefs", 20);
+
+        assert_eq!(router.len_for(DispatchKind::Command), 2);
+        assert_eq!(router.len_for(DispatchKind::Component), 1);
+        assert!(router.has_routes_for(DispatchKind::Modal));
+
+        let removed = router.clear_kind(DispatchKind::Command);
+        assert_eq!(removed, 2);
+        assert!(!router.has_routes_for(DispatchKind::Command));
+        assert_eq!(router.resolve_command("ping"), None);
+        assert_eq!(router.resolve_component("ticket:new"), Some(&10));
     }
 
     #[test]

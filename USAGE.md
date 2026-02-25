@@ -155,6 +155,15 @@ async fn register(http: &Http, guild_id: GuildId) -> Result<(), discordrs::Error
     let _ = commands
         .register_ref(http, SlashCommandScope::Guild(guild_id))
         .await?;
+
+    // 여러 scope를 한 번에 등록
+    let registered = commands
+        .register_many_ref(
+            http,
+            [SlashCommandScope::Global, SlashCommandScope::Guild(guild_id)],
+        )
+        .await?;
+    assert_eq!(registered.len(), 2);
     Ok(())
 }
 ```
@@ -200,6 +209,7 @@ router.set_component_fallback("handle_component_fallback");
 - 공통 fallback 헬퍼: `set_fallback(kind, ...)`, `remove_fallback(kind)`, `has_fallback(kind)`
 - 공통 exact 라우트 헬퍼: `insert(kind, key, ...)`, `set(kind, key, ...)`, `remove(kind, key)`, `contains(kind, key)`
 - 공통 prefix 라우트 헬퍼: `insert_prefix(kind, ...)`, `set_prefix(kind, ...)`, `remove_prefix(kind, ...)`
+- 타입별 라우트 정리 헬퍼: `len_for(kind)`, `has_routes_for(kind)`, `clear_kind(kind)`
 
 `SlashCommandSet` 추가 유틸:
 - `slash_commands![ ... ]`: 간결한 명령어 세트 구성
@@ -210,6 +220,7 @@ router.set_component_fallback("handle_component_fallback");
 - `merge(...)` / `with_merged(...)`: 다른 Set을 이름 기반으로 병합
 - `dedup_by_name()`: 중복 이름 제거(가장 마지막에 정의된 명령어 유지)
 - `without("name")`, `remove_where(...)`: 등록 전 정리 작업을 간결하게 처리
+- `register_many_ref(...)` / `register_many(...)`: 동일 명령어 세트를 여러 scope로 일괄 등록
 
 ## 10) 참고
 
