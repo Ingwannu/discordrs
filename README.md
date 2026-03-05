@@ -35,6 +35,8 @@ discordrs = { version = "0.3.0", features = ["gateway", "interactions"] }
 
 A navigation-focused docs website (similar to the discord.js docs browsing style) is available in [`discordrsdocs/`](discordrsdocs/):
 
+- Live URL: `http://discordrs.teamwicked.me/discordrsdocs/#/`
+- Korean URL: `http://discordrs.teamwicked.me/discordrsdocs/#/ko/README`
 - Entry: [`discordrsdocs/index.html`](discordrsdocs/index.html)
 - Local preview:
   ```bash

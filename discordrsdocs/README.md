@@ -13,6 +13,16 @@ A practical docs site for building Discord bots with `discordrs`.
 - [Full Technical Manual (Markdown)](docs/guide/full-manual.md)
 - [Full Technical Manual (PDF)](docs/guide/pdf-manual.md)
 
+## Language
+
+- [English](#/README)
+- [한국어](#/ko/README)
+
+## Live Site
+
+- <http://discordrs.teamwicked.me/discordrsdocs/#/>
+- Korean: <http://discordrs.teamwicked.me/discordrsdocs/#/ko/README>
+
 ## Install
 
 ```toml

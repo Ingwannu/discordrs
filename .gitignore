@@ -24,3 +24,5 @@ target/
 
 # Windows metadata streams
 *:Zone.Identifier
+*:[Zz]one.Identifier
+*Zone.Identifier
