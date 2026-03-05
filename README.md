@@ -1,20 +1,102 @@
-﻿# discordrs
+# discordrs
 
-`discordrs` is a Rust library that provides:
+Standalone Discord bot framework for Rust with Components V2, Gateway WebSocket, and HTTP client
 
-- Discord Components V2 builders (`Container`, `TextDisplay`, `MediaGallery`, `Section`, `SelectMenu`, etc.)
-- Modal builders and raw interaction response helpers
-- Modal `Radio Group`, `Checkbox Group`, and `Checkbox` component builders
-- Convenience helpers for sending/editing/followup messages with Components V2
+## Features
+
+- Gateway WebSocket client with connect, heartbeat, identify, resume, reconnect, and zlib compression
+- HTTP REST client with automatic 429 rate-limit retry
+- Components V2 builders (`Container`, `TextDisplay`, `Section`, `MediaGallery`, `Button`, `SelectMenu`, and more)
+- Modal builders with `RadioGroup`, `CheckboxGroup`, and `Checkbox`
+- V2 modal submission parser that preserves all V2 component types that serenity drops
+- Interaction routing helpers: `parse_raw_interaction` and `parse_interaction_context`
+- Feature-gated modules: `gateway` for bot client runtime, `interactions` for HTTP Interactions Endpoint
 
 ## Install
 
 ```toml
 [dependencies]
-discordrs = "0.1.1"
+discordrs = "0.3.0"
 ```
 
-## Modal Example (Radio/Checkbox)
+```toml
+[dependencies]
+# Gateway bot client
+discordrs = { version = "0.3.0", features = ["gateway"] }
+
+# HTTP Interactions Endpoint
+discordrs = { version = "0.3.0", features = ["interactions"] }
+
+# Both runtime modes
+discordrs = { version = "0.3.0", features = ["gateway", "interactions"] }
+```
+
+## Quick Example
+
+```rust
+use discordrs::{BotClient, Context, EventHandler, gateway_intents};
+use discordrs::{create_container, respond_with_container, parse_raw_interaction, parse_interaction_context, RawInteraction};
+use async_trait::async_trait;
+use serde_json::Value;
+
+struct Handler;
+
+#[async_trait]
+impl EventHandler for Handler {
+    async fn ready(&self, _ctx: Context, ready: Value) {
+        println!("Bot ready! User: {}", ready["user"]["username"]);
+    }
+    async fn interaction_create(&self, ctx: Context, interaction: Value) {
+        let ictx = parse_interaction_context(&interaction).unwrap();
+        match parse_raw_interaction(&interaction).unwrap() {
+            RawInteraction::Command { name, .. } => {
+                if name.as_deref() == Some("hello") {
+                    let container = create_container("Hello", "Hello, World!", vec![], None);
+                    let _ = respond_with_container(&ctx.http, &ictx.id, &ictx.token, container, false).await;
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+#[tokio::main]
+async fn main() {
+    let token = std::env::var("DISCORD_TOKEN").unwrap();
+    BotClient::builder(&token, gateway_intents::GUILDS | gateway_intents::GUILD_MESSAGES)
+        .event_handler(Handler)
+        .start()
+        .await
+        .unwrap();
+}
+```
+
+## Components V2 Example
+
+```rust
+use discordrs::{
+    button_style, create_container, send_container_message, ButtonConfig, DiscordHttpClient,
+};
+
+async fn send_support_panel(http: &DiscordHttpClient, channel_id: u64) -> Result<(), discordrs::Error> {
+    let buttons = vec![
+        ButtonConfig::new("ticket_open", "Open Ticket").style(button_style::PRIMARY),
+        ButtonConfig::new("ticket_status", "Check Status").style(button_style::SECONDARY),
+    ];
+
+    let container = create_container(
+        "Support Panel",
+        "Use the buttons below to manage support requests.",
+        buttons,
+        None,
+    );
+
+    send_container_message(http, channel_id, container).await?;
+    Ok(())
+}
+```
+
+## Modal Example with RadioGroup
 
 ```rust
 use discordrs::{
@@ -46,31 +128,15 @@ let modal = ModalBuilder::new("preferences_modal", "Preferences")
     );
 ```
 
-## Quick Example
+## Feature Flags
 
-```rust
-use discordrs::{button_style, create_container, send_container_message, ButtonConfig};
-use serenity::http::Http;
-use serenity::all::ChannelId;
-
-async fn send_panel(http: &Http, channel_id: ChannelId) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let buttons = vec![
-        ButtonConfig::new("open_ticket", "티켓 열기").style(button_style::PRIMARY).emoji("🎫")
-    ];
-
-    let container = create_container(
-        "지원 패널",
-        "아래 버튼을 눌러 티켓을 생성하세요.",
-        buttons,
-        None,
-    );
-
-    send_container_message(http, channel_id, container).await?;
-    Ok(())
-}
-```
+| Feature | Description | Key deps |
+|---------|-------------|----------|
+| (default) | Builders, parsers, HTTP client, helpers | reqwest, serde_json |
+| `gateway` | Gateway WebSocket, BotClient, EventHandler | tokio-tungstenite, flate2, async-trait |
+| `interactions` | HTTP Interactions Endpoint with Ed25519 | axum, ed25519-dalek |
 
 ## Notes
 
-- This library uses raw Discord HTTP payloads for Components V2 because serenity does not yet model all V2 structures directly.
-- For crates.io publication, ensure the package name `discordrs` is available in your account.
+- `discordrs` started as a helper around serenity workflows, but v0.3.0 is now a fully standalone framework.
+- The parser keeps V2 modal component types, including `Label`, `RadioGroup`, and `CheckboxGroup`, so routing logic can keep full fidelity.
