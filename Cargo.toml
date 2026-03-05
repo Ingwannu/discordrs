@@ -3,9 +3,15 @@ name = "discordrs"
 version = "0.3.0"
 edition = "2021"
 description = "Standalone Discord bot framework with Components V2, Gateway, and HTTP client"
+authors = [
+    "ingwannu <ingwannu@teamwicked.me>",
+    "ingwannu <ingwannu@gmail.com>",
+]
 license = "MIT OR Apache-2.0"
 readme = "README.md"
 documentation = "https://docs.rs/discordrs"
+repository = "https://github.com/Ingwannu/discordrs"
+homepage = "https://github.com/Ingwannu/discordrs"
 keywords = ["discord", "framework", "components", "modal", "bot"]
 categories = ["api-bindings"]
 

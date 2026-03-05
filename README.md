@@ -140,3 +140,17 @@ let modal = ModalBuilder::new("preferences_modal", "Preferences")
 
 - `discordrs` started as a helper around serenity workflows, but v0.3.0 is now a fully standalone framework.
 - The parser keeps V2 modal component types, including `Label`, `RadioGroup`, and `CheckboxGroup`, so routing logic can keep full fidelity.
+
+## License
+
+Licensed under either of:
+
+- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE))
+- MIT license ([LICENSE-MIT](LICENSE-MIT))
+
+at your option.
+
+## Developer
+
+- ingwannu
+- Contact: ingwannu@teamwicked.me, ingwannu@gmail.com
