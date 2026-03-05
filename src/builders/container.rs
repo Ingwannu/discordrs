@@ -221,18 +221,18 @@ pub fn create_container(
 
 pub fn create_default_buttons(button_type: &str) -> Vec<ButtonConfig> {
     match button_type {
-        "general" => vec![ButtonConfig::new("help_menu", "도움말")
+        "general" => vec![ButtonConfig::new("help_menu", "Help")
             .style(crate::constants::button_style::SECONDARY)
             .emoji("❓")],
         "status" => vec![
-            ButtonConfig::new("view_work_status", "근무 상태")
+            ButtonConfig::new("view_work_status", "Work Status")
                 .style(crate::constants::button_style::PRIMARY)
                 .emoji("📊"),
-            ButtonConfig::new("help_menu", "도움말")
+            ButtonConfig::new("help_menu", "Help")
                 .style(crate::constants::button_style::SECONDARY)
                 .emoji("❓"),
         ],
-        _ => vec![ButtonConfig::new("help_menu", "도움말")
+        _ => vec![ButtonConfig::new("help_menu", "Help")
             .style(crate::constants::button_style::SECONDARY)
             .emoji("❓")],
     }
