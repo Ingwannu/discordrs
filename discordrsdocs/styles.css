@@ -1,0 +1,82 @@
+:root {
+  --base-font-family: 'Space Grotesk', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --code-font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --theme-color: #4ea1ff;
+  --base-background-color: #f8fafc;
+  --sidebar-background: #0f172a;
+  --sidebar-name-color: #f8fafc;
+  --sidebar-nav-link-color: #cbd5e1;
+  --sidebar-nav-link-color--active: #4ea1ff;
+  --sidebar-nav-link-font-weight--active: 700;
+  --heading-color: #0f172a;
+  --text-color-base: #1e293b;
+  --link-color: #1d4ed8;
+  --content-max-width: 980px;
+  --cover-background-image: radial-gradient(circle at 0% 0%, #dbeafe 0%, transparent 45%),
+    radial-gradient(circle at 100% 20%, #bae6fd 0%, transparent 40%),
+    linear-gradient(160deg, #f8fafc, #e2e8f0 70%);
+}
+
+.app-name-link img {
+  display: none;
+}
+
+.sidebar {
+  border-right: 1px solid #1e293b;
+}
+
+.sidebar .search {
+  margin: 0.8rem;
+}
+
+.sidebar .search input {
+  border-radius: 10px;
+  background: #111b34;
+  color: #f1f5f9;
+  border: 1px solid #334155;
+}
+
+.markdown-section h1,
+.markdown-section h2,
+.markdown-section h3 {
+  letter-spacing: -0.01em;
+}
+
+.markdown-section h1 {
+  font-size: 2.2rem;
+}
+
+.markdown-section code {
+  font-size: 0.88em;
+  border-radius: 6px;
+}
+
+.markdown-section pre > code {
+  border-radius: 12px;
+}
+
+.markdown-section blockquote {
+  border-left: 4px solid #38bdf8;
+  background: #e0f2fe;
+  border-radius: 8px;
+  color: #0c4a6e;
+}
+
+.markdown-section table {
+  border-collapse: collapse;
+}
+
+.markdown-section table td,
+.markdown-section table th {
+  border: 1px solid #cbd5e1;
+}
+
+@media (max-width: 900px) {
+  :root {
+    --content-max-width: 100%;
+  }
+
+  .markdown-section h1 {
+    font-size: 1.7rem;
+  }
+}

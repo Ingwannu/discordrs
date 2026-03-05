@@ -1,0 +1,19 @@
+- [Home](README.md)
+- Guides
+  - [Getting Started](docs/guide/getting-started.md)
+  - [Usage Guide](docs/guide/usage-guide.md)
+  - [Architecture](docs/guide/architecture.md)
+  - [Interaction Flow](docs/guide/interaction-flow.md)
+  - [Deployment](docs/guide/deployment.md)
+  - [PDF Manual](docs/guide/pdf-manual.md)
+  - [Full Manual (Markdown)](docs/guide/full-manual.md)
+- API Reference
+  - [Builders](docs/api/builders.md)
+  - [Gateway](docs/api/gateway.md)
+  - [Parsers](docs/api/parsers.md)
+  - [HTTP and Helpers](docs/api/http-and-helpers.md)
+  - [Interactions Endpoint](docs/api/interactions-endpoint.md)
+  - [Core Types and Constants](docs/api/core-types-and-constants.md)
+- Source Docs
+  - [Crate README](docs/guide/crate-readme.md)
+  - [Changelog](docs/guide/changelog.md)

@@ -21,3 +21,6 @@ target/
 
 # IDE metadata
 .idea/
+
+# Windows metadata streams
+*:Zone.Identifier

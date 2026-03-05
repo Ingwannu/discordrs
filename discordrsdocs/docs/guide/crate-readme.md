@@ -31,16 +31,6 @@ discordrs = { version = "0.3.0", features = ["interactions"] }
 discordrs = { version = "0.3.0", features = ["gateway", "interactions"] }
 ```
 
-## Documentation Site
-
-A navigation-focused docs website (similar to the discord.js docs browsing style) is available in [`discordrsdocs/`](discordrsdocs/):
-
-- Entry: [`discordrsdocs/index.html`](discordrsdocs/index.html)
-- Local preview:
-  ```bash
-  python3 -m http.server 8080 --directory discordrsdocs
-  ```
-
 ## Quick Example
 
 ```rust
@@ -155,8 +145,8 @@ let modal = ModalBuilder::new("preferences_modal", "Preferences")
 
 Licensed under either of:
 
-- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE))
-- MIT license ([LICENSE-MIT](LICENSE-MIT))
+- Apache License, Version 2.0 ([LICENSE-APACHE](https://github.com/Ingwannu/discordrs/blob/main/LICENSE-APACHE))
+- MIT license ([LICENSE-MIT](https://github.com/Ingwannu/discordrs/blob/main/LICENSE-MIT))
 
 at your option.
 
