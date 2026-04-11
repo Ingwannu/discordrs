@@ -13,7 +13,10 @@ impl EventHandler for Handler {
         match event {
             Event::Ready(ready) => {
                 let cached_guilds = ctx.guilds().list_cached().await.len();
-                println!("ready_user={} cached_guilds={cached_guilds}", ready.data.user.username);
+                println!(
+                    "ready_user={} cached_guilds={cached_guilds}",
+                    ready.data.user.username
+                );
             }
             Event::MessageCreate(message) => {
                 let fetched = ctx

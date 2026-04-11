@@ -7,19 +7,19 @@
 ```toml
 [dependencies]
 # Core only
-discordrs = "0.4.0"
+discordrs = "1.0.0"
 
 # Typed gateway runtime
-discordrs = { version = "0.4.0", features = ["gateway"] }
+discordrs = { version = "1.0.0", features = ["gateway"] }
 
 # Typed gateway runtime with cache storage enabled
-discordrs = { version = "0.4.0", features = ["gateway", "cache"] }
+discordrs = { version = "1.0.0", features = ["gateway", "cache"] }
 
 # Typed gateway runtime with collectors
-discordrs = { version = "0.4.0", features = ["gateway", "collectors"] }
+discordrs = { version = "1.0.0", features = ["gateway", "collectors"] }
 
 # HTTP interactions endpoint
-discordrs = { version = "0.4.0", features = ["interactions"] }
+discordrs = { version = "1.0.0", features = ["interactions"] }
 ```
 
 ## 2. Start a typed Gateway client

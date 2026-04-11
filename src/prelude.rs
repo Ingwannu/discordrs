@@ -26,9 +26,9 @@ pub use crate::helpers::{
 };
 pub use crate::http::RestClient;
 pub use crate::model::{
-    ApplicationCommandOptionChoice, CommandInteractionData, CommandInteractionOption, CreateMessage,
-    GatewayBot, Interaction, InteractionCallbackResponse, InteractionContextData, Message,
-    PermissionsBitField, SessionStartLimit, Snowflake, VoiceServerUpdate, VoiceState,
+    ApplicationCommandOptionChoice, CommandInteractionData, CommandInteractionOption,
+    CreateMessage, GatewayBot, Interaction, InteractionCallbackResponse, InteractionContextData,
+    Message, PermissionsBitField, SessionStartLimit, Snowflake, VoiceServerUpdate, VoiceState,
 };
 pub use crate::response::{InteractionResponseBuilder, MessageBuilder};
 #[cfg(feature = "voice")]

@@ -26,17 +26,17 @@ A practical docs site for building typed Discord bots with `discordrs`.
 ```toml
 [dependencies]
 # core only
-discordrs = "0.4.0"
+discordrs = "1.0.0"
 
 # typed gateway runtime
-discordrs = { version = "0.4.0", features = ["gateway"] }
+discordrs = { version = "1.0.0", features = ["gateway"] }
 
 # typed gateway runtime with cache storage or collectors
-discordrs = { version = "0.4.0", features = ["gateway", "cache"] }
-discordrs = { version = "0.4.0", features = ["gateway", "collectors"] }
+discordrs = { version = "1.0.0", features = ["gateway", "cache"] }
+discordrs = { version = "1.0.0", features = ["gateway", "collectors"] }
 
 # interactions endpoint
-discordrs = { version = "0.4.0", features = ["interactions"] }
+discordrs = { version = "1.0.0", features = ["interactions"] }
 ```
 
 ## Roadmap Placeholders

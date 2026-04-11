@@ -224,7 +224,7 @@ fn parse_component_interaction_data(raw: &Value) -> Result<ComponentInteractionD
     })
 }
 
-    #[cfg(test)]
+#[cfg(test)]
 mod tests {
     use serde_json::json;
 
@@ -295,17 +295,11 @@ mod tests {
             Interaction::Autocomplete(interaction) => {
                 assert_eq!(interaction.data.options.len(), 2);
                 assert_eq!(interaction.data.options[0].name, "topic");
-                assert_eq!(
-                    interaction.data.options[0].value,
-                    Some(json!("billing"))
-                );
+                assert_eq!(interaction.data.options[0].value, Some(json!("billing")));
                 assert!(interaction.data.options[0].is_focused());
                 assert_eq!(interaction.data.options[1].name, "nested");
                 assert_eq!(interaction.data.options[1].options.len(), 1);
-                assert_eq!(
-                    interaction.data.options[1].options[0].value,
-                    Some(json!(2))
-                );
+                assert_eq!(interaction.data.options[1].options[0].value, Some(json!(2)));
             }
             other => panic!("unexpected typed interaction: {other:?}"),
         }

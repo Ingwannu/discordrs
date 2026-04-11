@@ -22,15 +22,15 @@
 ```toml
 [dependencies]
 # ì½”ì–´ë§??¬ìš©
-discordrs = "0.4.0"
+discordrs = "1.0.0"
 
-# Gateway ?°í???discordrs = { version = "0.4.0", features = ["gateway"] }
+# Gateway ?°í???discordrs = { version = "1.0.0", features = ["gateway"] }
 
 # Interactions Endpoint
-discordrs = { version = "0.4.0", features = ["interactions"] }
+discordrs = { version = "1.0.0", features = ["interactions"] }
 
 # ?????¬ìš©
-discordrs = { version = "0.4.0", features = ["gateway", "interactions"] }
+discordrs = { version = "1.0.0", features = ["gateway", "interactions"] }
 ```
 
 ## ë¡œì»¬ ë¯¸ë¦¬ë³´ê¸°
@@ -40,4 +40,5 @@ python3 -m http.server 8080 --directory discordrsdocs
 ```
 
 ë¸Œë¼?°ì??ì„œ <http://localhost:8080> ???´ë©´ ?©ë‹ˆ??
+
 

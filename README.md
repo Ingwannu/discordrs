@@ -24,31 +24,31 @@ Standalone Discord bot framework for Rust with typed models, typed gateway event
 
 ```toml
 [dependencies]
-discordrs = "0.4.0"
+discordrs = "1.0.0"
 ```
 
 ```toml
 [dependencies]
 # Gateway bot client
-discordrs = { version = "0.4.0", features = ["gateway"] }
+discordrs = { version = "1.0.0", features = ["gateway"] }
 
 # HTTP Interactions Endpoint
-discordrs = { version = "0.4.0", features = ["interactions"] }
+discordrs = { version = "1.0.0", features = ["interactions"] }
 
 # Gateway runtime with cache storage enabled
-discordrs = { version = "0.4.0", features = ["gateway", "cache"] }
+discordrs = { version = "1.0.0", features = ["gateway", "cache"] }
 
 # Gateway runtime with collectors
-discordrs = { version = "0.4.0", features = ["gateway", "collectors"] }
+discordrs = { version = "1.0.0", features = ["gateway", "collectors"] }
 
 # Sharding foundations
-discordrs = { version = "0.4.0", features = ["gateway", "sharding"] }
+discordrs = { version = "1.0.0", features = ["gateway", "sharding"] }
 
 # Voice foundations
-discordrs = { version = "0.4.0", features = ["voice"] }
+discordrs = { version = "1.0.0", features = ["voice"] }
 
 # Both runtime modes
-discordrs = { version = "0.4.0", features = ["gateway", "interactions"] }
+discordrs = { version = "1.0.0", features = ["gateway", "interactions"] }
 ```
 
 ## API Cleanup
@@ -251,7 +251,7 @@ fn app(public_key: &str) -> Router {
 
 ## Notes
 
-- `discordrs` started as a helper around serenity workflows, but v0.4.0 is now a fully standalone framework with a typed runtime surface.
+- `discordrs` started as a helper around serenity workflows, and `1.0.0` is the first stabilized standalone framework release with the typed runtime surface.
 - Use `try_interactions_endpoint()` when you want invalid public keys to fail at startup instead of during requests.
 - Use `discordrs::prelude::*` when you want the shortest path to the main runtime, command, helper, and response APIs.
 - Use `DiscordHttpClient::create_followup_message_with_application_id()` when you already have `InteractionContext.application_id` and the client was not initialized with an application id.

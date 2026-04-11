@@ -9,28 +9,28 @@ Pick features based on the runtime surface you want to ship.
 ```toml
 [dependencies]
 # Core only: models, builders, parsers, helpers, REST client
-discordrs = "0.4.0"
+discordrs = "1.0.0"
 
 # Gateway runtime
-discordrs = { version = "0.4.0", features = ["gateway"] }
+discordrs = { version = "1.0.0", features = ["gateway"] }
 
 # HTTP interactions endpoint
-discordrs = { version = "0.4.0", features = ["interactions"] }
+discordrs = { version = "1.0.0", features = ["interactions"] }
 
 # Gateway runtime with cache storage enabled
-discordrs = { version = "0.4.0", features = ["gateway", "cache"] }
+discordrs = { version = "1.0.0", features = ["gateway", "cache"] }
 
 # Gateway runtime with collectors
-discordrs = { version = "0.4.0", features = ["gateway", "collectors"] }
+discordrs = { version = "1.0.0", features = ["gateway", "collectors"] }
 
 # Gateway runtime with shard supervisor and shard status APIs
-discordrs = { version = "0.4.0", features = ["gateway", "sharding"] }
+discordrs = { version = "1.0.0", features = ["gateway", "sharding"] }
 
 # Voice manager plus voice gateway/UDP runtime
-discordrs = { version = "0.4.0", features = ["voice"] }
+discordrs = { version = "1.0.0", features = ["voice"] }
 
 # Gateway runtime with voice helpers
-discordrs = { version = "0.4.0", features = ["gateway", "voice"] }
+discordrs = { version = "1.0.0", features = ["gateway", "voice"] }
 ```
 
 If you want the common runtime helpers in one import, prefer:

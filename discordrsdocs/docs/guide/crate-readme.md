@@ -21,19 +21,19 @@ Standalone Discord bot framework for Rust with typed models, typed gateway event
 
 ```toml
 [dependencies]
-discordrs = "0.4.0"
+discordrs = "1.0.0"
 ```
 
 ```toml
 [dependencies]
 # Gateway bot client
-discordrs = { version = "0.4.0", features = ["gateway"] }
+discordrs = { version = "1.0.0", features = ["gateway"] }
 
 # HTTP Interactions Endpoint
-discordrs = { version = "0.4.0", features = ["interactions"] }
+discordrs = { version = "1.0.0", features = ["interactions"] }
 
 # Both runtime modes
-discordrs = { version = "0.4.0", features = ["gateway", "interactions"] }
+discordrs = { version = "1.0.0", features = ["gateway", "interactions"] }
 ```
 
 ## Quick Example
@@ -141,7 +141,7 @@ let modal = ModalBuilder::new("preferences_modal", "Preferences")
 
 ## Notes
 
-- `discordrs` started as a helper around serenity workflows, but v0.4.0 is now a fully standalone framework.
+- `discordrs` started as a helper around serenity workflows, and `1.0.0` is the first stabilized standalone framework release.
 - `EventHandler::handle_event(...)` is the typed gateway entry point. Legacy convenience callbacks such as `ready`, `message_create`, and `interaction_create` remain available and now receive typed payloads too.
 - The parser keeps V2 modal component types, including `Label`, `RadioGroup`, and `CheckboxGroup`, so routing logic can keep full fidelity.
 

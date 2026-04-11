@@ -426,7 +426,8 @@ impl RestClient {
         body: &InteractionCallbackResponse,
     ) -> Result<(), DiscordError> {
         let path = interaction_callback_path(interaction_id.into(), interaction_token)?;
-        self.request_no_content(Method::POST, &path, Some(body)).await
+        self.request_no_content(Method::POST, &path, Some(body))
+            .await
     }
 
     pub async fn bulk_overwrite_global_commands_typed(
@@ -809,7 +810,7 @@ impl RestClient {
             .client
             .request(method, url)
             .header("Content-Type", "application/json")
-            .header("User-Agent", "DiscordBot (discordrs, 0.4.0)");
+            .header("User-Agent", "DiscordBot (discordrs, 1.0.0)");
 
         if request_uses_bot_authorization(&normalized_path) {
             request_builder =
