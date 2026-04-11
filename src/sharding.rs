@@ -4,8 +4,8 @@ use std::sync::{Arc, Mutex};
 
 use serde_json::Value;
 
-use crate::model::Snowflake;
 use crate::error::DiscordError;
+use crate::model::Snowflake;
 use crate::types::invalid_data_error;
 use crate::ws::GatewayConnectionConfig;
 

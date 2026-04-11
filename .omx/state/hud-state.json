@@ -1,5 +1,0 @@
-{
-  "last_turn_at": "2026-04-10T15:41:36.409Z",
-  "turn_count": 52,
-  "last_agent_output": "추가해뒀습니다.\n\n`CHANGELOG.md`에는 `0.4.0` 아래에 이번 후속 패치들을 넣었습니다. cache eviction cascade, `READY` stale cache"
-}

@@ -26,3 +26,10 @@ target/
 *:Zone.Identifier
 *:[Zz]one.Identifier
 *Zone.Identifier
+
+# Local agent/runtime state
+.omc/
+.omx/
+
+# Binary design assets
+*.ai

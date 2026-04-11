@@ -1,12 +1,12 @@
 use serde_json::Value;
 
+use crate::error::DiscordError;
 use crate::model::{
     AutocompleteInteraction, ChatInputCommandInteraction, CommandInteractionData,
     ComponentInteraction, ComponentInteractionData, Interaction, InteractionContextData,
     MessageContextMenuInteraction, ModalSubmitInteraction, PingInteraction, Snowflake,
     UserContextMenuInteraction,
 };
-use crate::error::DiscordError;
 use crate::types::invalid_data_error;
 
 use super::modal::{parse_modal_submission, V2ModalSubmission};

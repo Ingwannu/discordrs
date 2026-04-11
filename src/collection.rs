@@ -129,10 +129,7 @@ where
     ///
     /// Parallels `Collection.flatMap((v, k) => [...results])`.
     pub fn flat_map<O>(&self, f: impl Fn(&K, &V) -> Vec<O>) -> Vec<O> {
-        self.0
-            .iter()
-            .flat_map(|(k, v)| f(k, v))
-            .collect()
+        self.0.iter().flat_map(|(k, v)| f(k, v)).collect()
     }
 
     /// Maps entries that match the predicate, returning a Vec.
@@ -168,11 +165,7 @@ where
     ///
     /// Parallels `Collection.sortBy()` or `Collection.sort()`.
     pub fn sort_by(&self, compare: impl Fn(&V, &V) -> Ordering) -> Vec<(K, V)> {
-        let mut pairs: Vec<(K, V)> = self
-            .0
-            .iter()
-            .map(|(k, v)| (k.clone(), v.clone()))
-            .collect();
+        let mut pairs: Vec<(K, V)> = self.0.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
         pairs.sort_by(|a, b| compare(&a.1, &b.1));
         pairs
     }

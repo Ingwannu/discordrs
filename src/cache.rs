@@ -377,6 +377,7 @@ pub struct GuildManager {
 }
 
 impl GuildManager {
+    #[cfg(feature = "gateway")]
     pub(crate) fn new(http: Arc<DiscordHttpClient>, cache: CacheHandle) -> Self {
         Self { http, cache }
     }
@@ -409,6 +410,7 @@ pub struct ChannelManager {
 }
 
 impl ChannelManager {
+    #[cfg(feature = "gateway")]
     pub(crate) fn new(http: Arc<DiscordHttpClient>, cache: CacheHandle) -> Self {
         Self { http, cache }
     }
@@ -441,6 +443,7 @@ pub struct MemberManager {
 }
 
 impl MemberManager {
+    #[cfg(feature = "gateway")]
     pub(crate) fn new(http: Arc<DiscordHttpClient>, cache: CacheHandle) -> Self {
         Self { http, cache }
     }
@@ -488,6 +491,7 @@ pub struct MessageManager {
 }
 
 impl MessageManager {
+    #[cfg(feature = "gateway")]
     pub(crate) fn new(http: Arc<DiscordHttpClient>, cache: CacheHandle) -> Self {
         Self { http, cache }
     }
@@ -537,6 +541,7 @@ pub struct RoleManager {
 }
 
 impl RoleManager {
+    #[cfg(feature = "gateway")]
     pub(crate) fn new(http: Arc<DiscordHttpClient>, cache: CacheHandle) -> Self {
         Self { http, cache }
     }
@@ -923,7 +928,7 @@ mod tests {
         }
 
         cache
-            .remove_messages_bulk(&channel_id, &[first_message_id.clone()])
+            .remove_messages_bulk(&channel_id, std::slice::from_ref(&first_message_id))
             .await;
         assert!(cache
             .message(&channel_id, &first_message_id)

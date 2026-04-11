@@ -43,7 +43,11 @@ pub(crate) fn required_string_field(
         .ok_or_else(|| invalid_data_error(format!("missing or invalid {context}.{field}")))
 }
 
-pub(crate) fn required_u8_field(value: &Value, field: &str, context: &str) -> Result<u8, DiscordError> {
+pub(crate) fn required_u8_field(
+    value: &Value,
+    field: &str,
+    context: &str,
+) -> Result<u8, DiscordError> {
     value
         .get(field)
         .and_then(value_to_u8)

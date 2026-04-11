@@ -1,3 +1,4 @@
+pub use crate::bitfield::{BitField, Intents, MessageFlags, Permissions};
 pub use crate::builders::{
     create_container, ActionRowBuilder, ButtonBuilder, ComponentsV2Message, ContainerBuilder,
     EmbedBuilder, ModalBuilder, SelectMenuBuilder, TextInputBuilder,
@@ -12,7 +13,6 @@ pub use crate::command::{
 };
 pub use crate::constants::{button_style, gateway_intents, text_input_style};
 pub use crate::error::DiscordError;
-pub use crate::bitfield::{BitField, Intents, MessageFlags, Permissions};
 pub use crate::event::Event;
 #[cfg(all(feature = "gateway", feature = "sharding"))]
 pub use crate::gateway::ShardSupervisor;

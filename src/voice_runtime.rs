@@ -9,8 +9,8 @@ use tokio::task::JoinHandle;
 use tokio::time::{interval, Duration};
 use tokio_tungstenite::{connect_async, tungstenite::Message as WsMessage};
 
-use crate::model::Snowflake;
 use crate::error::DiscordError;
+use crate::model::Snowflake;
 use crate::types::invalid_data_error;
 use crate::voice::{
     VoiceEncryptionMode, VoiceGatewayCommand, VoiceGatewayReady, VoiceSelectProtocolCommand,

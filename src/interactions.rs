@@ -11,12 +11,12 @@ use ed25519_dalek::{Signature, VerifyingKey};
 use serde_json::Value;
 
 use crate::builders::ModalBuilder;
+use crate::error::DiscordError;
 use crate::model::{ApplicationCommandOptionChoice, Interaction, InteractionContextData};
 use crate::parsers::{
     parse_interaction, parse_interaction_context, parse_raw_interaction, value_to_u8,
     InteractionContext, RawInteraction,
 };
-use crate::error::DiscordError;
 use crate::types::invalid_data_error;
 
 pub enum InteractionResponse {
@@ -285,7 +285,10 @@ where
     (StatusCode::OK, Json(response_payload)).into_response()
 }
 
-pub fn try_typed_interactions_endpoint<H>(public_key: &str, handler: H) -> Result<Router, DiscordError>
+pub fn try_typed_interactions_endpoint<H>(
+    public_key: &str,
+    handler: H,
+) -> Result<Router, DiscordError>
 where
     H: TypedInteractionHandler + Clone + Send + Sync + 'static,
 {

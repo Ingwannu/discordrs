@@ -42,10 +42,7 @@ pub enum DiscordError {
     /// An HTTP transport error occurred.
     Http(HttpError),
     /// A rate limit was encountered.
-    RateLimit {
-        route: String,
-        retry_after: f64,
-    },
+    RateLimit { route: String, retry_after: f64 },
     /// JSON serialization or deserialization failed.
     Json(String),
     /// An I/O error occurred.
@@ -125,10 +122,10 @@ impl fmt::Display for DiscordError {
                 write!(f, "): {message}")
             }
             Self::Http(err) => write!(f, "HTTP error: {err}"),
-            Self::RateLimit {
-                route,
-                retry_after,
-            } => write!(f, "Rate limited on route '{route}', retry after {retry_after}s"),
+            Self::RateLimit { route, retry_after } => write!(
+                f,
+                "Rate limited on route '{route}', retry after {retry_after}s"
+            ),
             Self::Json(msg) => write!(f, "JSON error: {msg}"),
             Self::Io(msg) => write!(f, "I/O error: {msg}"),
             Self::Model { message } => write!(f, "Model error: {message}"),

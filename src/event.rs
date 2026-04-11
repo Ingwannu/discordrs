@@ -1,12 +1,12 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::error::DiscordError;
 use crate::model::{
     Channel, Guild, Interaction, Member, Message, Role, Snowflake, User, VoiceServerUpdate,
     VoiceState,
 };
 use crate::parsers::parse_interaction;
-use crate::error::DiscordError;
 use crate::types::Emoji;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -399,18 +399,25 @@ pub fn decode_event(event_name: &str, data: Value) -> Result<Event, DiscordError
             raw: data,
         }),
         "MESSAGE_DELETE_BULK" => {
-            let ids: Vec<Snowflake> = serde_json::from_value(data.get("ids").cloned().unwrap_or(Value::Null))?;
+            let ids: Vec<Snowflake> =
+                serde_json::from_value(data.get("ids").cloned().unwrap_or(Value::Null))?;
             Event::MessageDeleteBulk(BulkMessageDeleteEvent {
                 channel_id: read_required_snowflake(&data, "channel_id")?,
-                guild_id: data.get("guild_id").and_then(|v| serde_json::from_value(v.clone()).ok()),
+                guild_id: data
+                    .get("guild_id")
+                    .and_then(|v| serde_json::from_value(v.clone()).ok()),
                 ids,
                 raw: data,
             })
         }
         "CHANNEL_PINS_UPDATE" => Event::ChannelPinsUpdate(ChannelPinsUpdateEvent {
             channel_id: read_required_snowflake(&data, "channel_id")?,
-            guild_id: data.get("guild_id").and_then(|v| serde_json::from_value(v.clone()).ok()),
-            last_pin_timestamp: data.get("last_pin_timestamp").and_then(|v| v.as_str().map(String::from)),
+            guild_id: data
+                .get("guild_id")
+                .and_then(|v| serde_json::from_value(v.clone()).ok()),
+            last_pin_timestamp: data
+                .get("last_pin_timestamp")
+                .and_then(|v| v.as_str().map(String::from)),
             raw: data,
         }),
         "GUILD_BAN_ADD" => Event::GuildBanAdd(GuildBanEvent {
@@ -425,63 +432,120 @@ pub fn decode_event(event_name: &str, data: Value) -> Result<Event, DiscordError
         }),
         "GUILD_EMOJIS_UPDATE" => Event::GuildEmojisUpdate(GuildEmojisUpdateEvent {
             guild_id: read_required_snowflake(&data, "guild_id")?,
-            emojis: serde_json::from_value(data.get("emojis").cloned().unwrap_or(Value::Null)).unwrap_or_default(),
+            emojis: serde_json::from_value(data.get("emojis").cloned().unwrap_or(Value::Null))
+                .unwrap_or_default(),
             raw: data,
         }),
-        "GUILD_INTEGRATIONS_UPDATE" => Event::GuildIntegrationsUpdate(GuildIntegrationsUpdateEvent {
-            guild_id: data.get("guild_id").and_then(|v| serde_json::from_value(v.clone()).ok()),
-            raw: data,
-        }),
+        "GUILD_INTEGRATIONS_UPDATE" => {
+            Event::GuildIntegrationsUpdate(GuildIntegrationsUpdateEvent {
+                guild_id: data
+                    .get("guild_id")
+                    .and_then(|v| serde_json::from_value(v.clone()).ok()),
+                raw: data,
+            })
+        }
         "WEBHOOKS_UPDATE" => Event::WebhooksUpdate(WebhooksUpdateEvent {
-            guild_id: data.get("guild_id").and_then(|v| serde_json::from_value(v.clone()).ok()),
-            channel_id: data.get("channel_id").and_then(|v| serde_json::from_value(v.clone()).ok()),
+            guild_id: data
+                .get("guild_id")
+                .and_then(|v| serde_json::from_value(v.clone()).ok()),
+            channel_id: data
+                .get("channel_id")
+                .and_then(|v| serde_json::from_value(v.clone()).ok()),
             raw: data,
         }),
         "INVITE_CREATE" => Event::InviteCreate(InviteEvent {
-            guild_id: data.get("guild_id").and_then(|v| serde_json::from_value(v.clone()).ok()),
-            channel_id: data.get("channel_id").and_then(|v| serde_json::from_value(v.clone()).ok()),
+            guild_id: data
+                .get("guild_id")
+                .and_then(|v| serde_json::from_value(v.clone()).ok()),
+            channel_id: data
+                .get("channel_id")
+                .and_then(|v| serde_json::from_value(v.clone()).ok()),
             code: data.get("code").and_then(|v| v.as_str().map(String::from)),
             raw: data,
         }),
         "INVITE_DELETE" => Event::InviteDelete(InviteEvent {
-            guild_id: data.get("guild_id").and_then(|v| serde_json::from_value(v.clone()).ok()),
-            channel_id: data.get("channel_id").and_then(|v| serde_json::from_value(v.clone()).ok()),
+            guild_id: data
+                .get("guild_id")
+                .and_then(|v| serde_json::from_value(v.clone()).ok()),
+            channel_id: data
+                .get("channel_id")
+                .and_then(|v| serde_json::from_value(v.clone()).ok()),
             code: data.get("code").and_then(|v| v.as_str().map(String::from)),
             raw: data,
         }),
         "MESSAGE_REACTION_ADD" => Event::MessageReactionAdd(ReactionEvent {
-            user_id: data.get("user_id").and_then(|v| serde_json::from_value(v.clone()).ok()),
-            channel_id: data.get("channel_id").and_then(|v| serde_json::from_value(v.clone()).ok()),
-            message_id: data.get("message_id").and_then(|v| serde_json::from_value(v.clone()).ok()),
-            guild_id: data.get("guild_id").and_then(|v| serde_json::from_value(v.clone()).ok()),
-            emoji: data.get("emoji").and_then(|v| serde_json::from_value(v.clone()).ok()),
+            user_id: data
+                .get("user_id")
+                .and_then(|v| serde_json::from_value(v.clone()).ok()),
+            channel_id: data
+                .get("channel_id")
+                .and_then(|v| serde_json::from_value(v.clone()).ok()),
+            message_id: data
+                .get("message_id")
+                .and_then(|v| serde_json::from_value(v.clone()).ok()),
+            guild_id: data
+                .get("guild_id")
+                .and_then(|v| serde_json::from_value(v.clone()).ok()),
+            emoji: data
+                .get("emoji")
+                .and_then(|v| serde_json::from_value(v.clone()).ok()),
             raw: data,
         }),
         "MESSAGE_REACTION_REMOVE" => Event::MessageReactionRemove(ReactionEvent {
-            user_id: data.get("user_id").and_then(|v| serde_json::from_value(v.clone()).ok()),
-            channel_id: data.get("channel_id").and_then(|v| serde_json::from_value(v.clone()).ok()),
-            message_id: data.get("message_id").and_then(|v| serde_json::from_value(v.clone()).ok()),
-            guild_id: data.get("guild_id").and_then(|v| serde_json::from_value(v.clone()).ok()),
-            emoji: data.get("emoji").and_then(|v| serde_json::from_value(v.clone()).ok()),
+            user_id: data
+                .get("user_id")
+                .and_then(|v| serde_json::from_value(v.clone()).ok()),
+            channel_id: data
+                .get("channel_id")
+                .and_then(|v| serde_json::from_value(v.clone()).ok()),
+            message_id: data
+                .get("message_id")
+                .and_then(|v| serde_json::from_value(v.clone()).ok()),
+            guild_id: data
+                .get("guild_id")
+                .and_then(|v| serde_json::from_value(v.clone()).ok()),
+            emoji: data
+                .get("emoji")
+                .and_then(|v| serde_json::from_value(v.clone()).ok()),
             raw: data,
         }),
         "MESSAGE_REACTION_REMOVE_ALL" => Event::MessageReactionRemoveAll(ReactionRemoveAllEvent {
-            channel_id: data.get("channel_id").and_then(|v| serde_json::from_value(v.clone()).ok()),
-            message_id: data.get("message_id").and_then(|v| serde_json::from_value(v.clone()).ok()),
-            guild_id: data.get("guild_id").and_then(|v| serde_json::from_value(v.clone()).ok()),
+            channel_id: data
+                .get("channel_id")
+                .and_then(|v| serde_json::from_value(v.clone()).ok()),
+            message_id: data
+                .get("message_id")
+                .and_then(|v| serde_json::from_value(v.clone()).ok()),
+            guild_id: data
+                .get("guild_id")
+                .and_then(|v| serde_json::from_value(v.clone()).ok()),
             raw: data,
         }),
         "TYPING_START" => Event::TypingStart(TypingStartEvent {
-            channel_id: data.get("channel_id").and_then(|v| serde_json::from_value(v.clone()).ok()),
-            guild_id: data.get("guild_id").and_then(|v| serde_json::from_value(v.clone()).ok()),
-            user_id: data.get("user_id").and_then(|v| serde_json::from_value(v.clone()).ok()),
+            channel_id: data
+                .get("channel_id")
+                .and_then(|v| serde_json::from_value(v.clone()).ok()),
+            guild_id: data
+                .get("guild_id")
+                .and_then(|v| serde_json::from_value(v.clone()).ok()),
+            user_id: data
+                .get("user_id")
+                .and_then(|v| serde_json::from_value(v.clone()).ok()),
             timestamp: data.get("timestamp").and_then(|v| v.as_u64()),
             raw: data,
         }),
         "PRESENCE_UPDATE" => Event::PresenceUpdate(PresenceUpdateEvent {
-            user_id: data.pointer("/user/id").and_then(|v| v.as_str()).map(|s| s.to_string()).map(Snowflake::new),
-            guild_id: data.get("guild_id").and_then(|v| serde_json::from_value(v.clone()).ok()),
-            status: data.get("status").and_then(|v| v.as_str().map(String::from)),
+            user_id: data
+                .pointer("/user/id")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+                .map(Snowflake::new),
+            guild_id: data
+                .get("guild_id")
+                .and_then(|v| serde_json::from_value(v.clone()).ok()),
+            status: data
+                .get("status")
+                .and_then(|v| v.as_str().map(String::from)),
             raw: data,
         }),
         "INTERACTION_CREATE" => Event::InteractionCreate(InteractionEvent {

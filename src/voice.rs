@@ -2,8 +2,8 @@ use std::collections::{HashMap, VecDeque};
 
 use serde::{Deserialize, Serialize};
 
-use crate::model::{Snowflake, VoiceServerUpdate, VoiceState};
 use crate::error::DiscordError;
+use crate::model::{Snowflake, VoiceServerUpdate, VoiceState};
 use crate::types::invalid_data_error;
 #[cfg(feature = "voice")]
 use crate::voice_runtime::VoiceRuntimeConfig;

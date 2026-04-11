@@ -8,7 +8,9 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 /// Trait defining the flags for a specific BitField type.
 ///
 /// Implement this for a zero-sized marker type to create a typed BitField.
-pub trait BitFieldFlags: Copy + Clone + fmt::Debug + PartialEq + Eq + Send + Sync + 'static {
+pub trait BitFieldFlags:
+    Copy + Clone + fmt::Debug + PartialEq + Eq + Send + Sync + 'static
+{
     /// All defined flag bits as `(bit_value, name)` pairs.
     const BITS: &'static [(u64, &'static str)];
 }
@@ -350,15 +352,27 @@ pub mod gateway_intents {
 
     /// All non-privileged intents (safe for default use).
     pub const NON_PRIVILEGED: BitField<IntentFlags> = BitField::from_bits(
-        (1 << 0) | (1 << 2) | (1 << 3) | (1 << 4) | (1 << 5) | (1 << 6)
-            | (1 << 7) | (1 << 9) | (1 << 10) | (1 << 11) | (1 << 12)
-            | (1 << 13) | (1 << 14) | (1 << 16) | (1 << 20) | (1 << 21),
+        (1 << 0)
+            | (1 << 2)
+            | (1 << 3)
+            | (1 << 4)
+            | (1 << 5)
+            | (1 << 6)
+            | (1 << 7)
+            | (1 << 9)
+            | (1 << 10)
+            | (1 << 11)
+            | (1 << 12)
+            | (1 << 13)
+            | (1 << 14)
+            | (1 << 16)
+            | (1 << 20)
+            | (1 << 21),
     );
 
     /// All privileged intents (requires enabling in Developer Portal).
-    pub const PRIVILEGED: BitField<IntentFlags> = BitField::from_bits(
-        (1 << 1) | (1 << 8) | (1 << 15),
-    );
+    pub const PRIVILEGED: BitField<IntentFlags> =
+        BitField::from_bits((1 << 1) | (1 << 8) | (1 << 15));
 }
 
 /// Permission flags.

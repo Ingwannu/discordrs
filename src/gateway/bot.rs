@@ -20,6 +20,7 @@ use crate::cache::{
 };
 #[cfg(feature = "collectors")]
 use crate::collector::CollectorHub;
+use crate::error::DiscordError;
 use crate::event::{decode_event, Event};
 use crate::http::DiscordHttpClient;
 use crate::model::Interaction;
@@ -29,7 +30,6 @@ use crate::sharding::{
     ShardSupervisorEvent, ShardingManager,
 };
 use crate::types::invalid_data_error;
-use crate::error::DiscordError;
 #[cfg(feature = "voice")]
 use crate::voice::{AudioTrack, VoiceConnectionConfig, VoiceConnectionState, VoiceManager};
 #[cfg(feature = "voice")]
@@ -81,7 +81,11 @@ impl ShardSupervisor {
         self.send(shard_id, ShardIpcMessage::Reconnect)
     }
 
-    pub fn update_presence(&self, shard_id: u32, status: impl Into<String>) -> Result<(), DiscordError> {
+    pub fn update_presence(
+        &self,
+        shard_id: u32,
+        status: impl Into<String>,
+    ) -> Result<(), DiscordError> {
         self.send(shard_id, ShardIpcMessage::UpdatePresence(status.into()))
     }
 
@@ -155,7 +159,10 @@ impl ShardSupervisor {
         self.wait_with_timeout(None).await
     }
 
-    async fn wait_with_timeout(self, timeout_duration: Option<Duration>) -> Result<(), DiscordError> {
+    async fn wait_with_timeout(
+        self,
+        timeout_duration: Option<Duration>,
+    ) -> Result<(), DiscordError> {
         for (shard_id, task) in self.tasks {
             let mut task = task;
             let result = if let Some(timeout_duration) = timeout_duration {
@@ -506,20 +513,33 @@ pub trait EventHandler: Send + Sync + 'static {
             Event::ChannelUpdate(event) => self.channel_update(ctx, event.channel).await,
             Event::ChannelDelete(event) => self.channel_delete(ctx, event.channel).await,
             Event::MemberAdd(event) => self.member_add(ctx, event.guild_id, event.member).await,
-            Event::MemberUpdate(event) => self.member_update(ctx, event.guild_id, event.member).await,
-            Event::MemberRemove(event) => self.member_remove(ctx, event.data.guild_id, event.data.user).await,
+            Event::MemberUpdate(event) => {
+                self.member_update(ctx, event.guild_id, event.member).await
+            }
+            Event::MemberRemove(event) => {
+                self.member_remove(ctx, event.data.guild_id, event.data.user)
+                    .await
+            }
             Event::RoleCreate(event) => self.role_create(ctx, event.guild_id, event.role).await,
             Event::RoleUpdate(event) => self.role_update(ctx, event.guild_id, event.role).await,
-            Event::RoleDelete(event) => self.role_delete(ctx, event.data.guild_id, event.data.role_id).await,
+            Event::RoleDelete(event) => {
+                self.role_delete(ctx, event.data.guild_id, event.data.role_id)
+                    .await
+            }
             Event::MessageCreate(event) => self.message_create(ctx, event.message).await,
             Event::MessageUpdate(event) => self.message_update(ctx, event.message).await,
-            Event::MessageDelete(event) => self.message_delete(ctx, event.data.channel_id, event.data.id).await,
+            Event::MessageDelete(event) => {
+                self.message_delete(ctx, event.data.channel_id, event.data.id)
+                    .await
+            }
             Event::MessageDeleteBulk(event) => self.message_delete_bulk(ctx, event).await,
             Event::ChannelPinsUpdate(event) => self.channel_pins_update(ctx, event).await,
             Event::GuildBanAdd(event) => self.guild_ban_add(ctx, event).await,
             Event::GuildBanRemove(event) => self.guild_ban_remove(ctx, event).await,
             Event::GuildEmojisUpdate(event) => self.guild_emojis_update(ctx, event).await,
-            Event::GuildIntegrationsUpdate(event) => self.guild_integrations_update(ctx, event).await,
+            Event::GuildIntegrationsUpdate(event) => {
+                self.guild_integrations_update(ctx, event).await
+            }
             Event::WebhooksUpdate(event) => self.webhooks_update(ctx, event).await,
             Event::InviteCreate(event) => self.invite_create(ctx, event).await,
             Event::InviteDelete(event) => self.invite_delete(ctx, event).await,
@@ -530,7 +550,9 @@ pub trait EventHandler: Send + Sync + 'static {
             Event::MessageReactionRemoveAll(event) => self.reaction_remove_all(ctx, event).await,
             Event::TypingStart(event) => self.typing_start(ctx, event).await,
             Event::PresenceUpdate(event) => self.presence_update(ctx, event).await,
-            Event::InteractionCreate(event) => self.interaction_create(ctx, event.interaction).await,
+            Event::InteractionCreate(event) => {
+                self.interaction_create(ctx, event.interaction).await
+            }
             Event::Unknown { kind, raw } => self.raw_event(ctx, kind, raw).await,
         }
     }
@@ -542,21 +564,83 @@ pub trait EventHandler: Send + Sync + 'static {
     async fn channel_create(&self, _ctx: Context, _channel: crate::model::Channel) {}
     async fn channel_update(&self, _ctx: Context, _channel: crate::model::Channel) {}
     async fn channel_delete(&self, _ctx: Context, _channel: crate::model::Channel) {}
-    async fn member_add(&self, _ctx: Context, _guild_id: crate::model::Snowflake, _member: crate::model::Member) {}
-    async fn member_update(&self, _ctx: Context, _guild_id: crate::model::Snowflake, _member: crate::model::Member) {}
-    async fn member_remove(&self, _ctx: Context, _guild_id: crate::model::Snowflake, _user: crate::model::User) {}
-    async fn role_create(&self, _ctx: Context, _guild_id: crate::model::Snowflake, _role: crate::model::Role) {}
-    async fn role_update(&self, _ctx: Context, _guild_id: crate::model::Snowflake, _role: crate::model::Role) {}
-    async fn role_delete(&self, _ctx: Context, _guild_id: crate::model::Snowflake, _role_id: crate::model::Snowflake) {}
+    async fn member_add(
+        &self,
+        _ctx: Context,
+        _guild_id: crate::model::Snowflake,
+        _member: crate::model::Member,
+    ) {
+    }
+    async fn member_update(
+        &self,
+        _ctx: Context,
+        _guild_id: crate::model::Snowflake,
+        _member: crate::model::Member,
+    ) {
+    }
+    async fn member_remove(
+        &self,
+        _ctx: Context,
+        _guild_id: crate::model::Snowflake,
+        _user: crate::model::User,
+    ) {
+    }
+    async fn role_create(
+        &self,
+        _ctx: Context,
+        _guild_id: crate::model::Snowflake,
+        _role: crate::model::Role,
+    ) {
+    }
+    async fn role_update(
+        &self,
+        _ctx: Context,
+        _guild_id: crate::model::Snowflake,
+        _role: crate::model::Role,
+    ) {
+    }
+    async fn role_delete(
+        &self,
+        _ctx: Context,
+        _guild_id: crate::model::Snowflake,
+        _role_id: crate::model::Snowflake,
+    ) {
+    }
     async fn message_create(&self, _ctx: Context, _message: crate::model::Message) {}
     async fn message_update(&self, _ctx: Context, _message: crate::model::Message) {}
-    async fn message_delete(&self, _ctx: Context, _channel_id: crate::model::Snowflake, _message_id: crate::model::Snowflake) {}
-    async fn message_delete_bulk(&self, _ctx: Context, _event: crate::event::BulkMessageDeleteEvent) {}
-    async fn channel_pins_update(&self, _ctx: Context, _event: crate::event::ChannelPinsUpdateEvent) {}
+    async fn message_delete(
+        &self,
+        _ctx: Context,
+        _channel_id: crate::model::Snowflake,
+        _message_id: crate::model::Snowflake,
+    ) {
+    }
+    async fn message_delete_bulk(
+        &self,
+        _ctx: Context,
+        _event: crate::event::BulkMessageDeleteEvent,
+    ) {
+    }
+    async fn channel_pins_update(
+        &self,
+        _ctx: Context,
+        _event: crate::event::ChannelPinsUpdateEvent,
+    ) {
+    }
     async fn guild_ban_add(&self, _ctx: Context, _event: crate::event::GuildBanEvent) {}
     async fn guild_ban_remove(&self, _ctx: Context, _event: crate::event::GuildBanEvent) {}
-    async fn guild_emojis_update(&self, _ctx: Context, _event: crate::event::GuildEmojisUpdateEvent) {}
-    async fn guild_integrations_update(&self, _ctx: Context, _event: crate::event::GuildIntegrationsUpdateEvent) {}
+    async fn guild_emojis_update(
+        &self,
+        _ctx: Context,
+        _event: crate::event::GuildEmojisUpdateEvent,
+    ) {
+    }
+    async fn guild_integrations_update(
+        &self,
+        _ctx: Context,
+        _event: crate::event::GuildIntegrationsUpdateEvent,
+    ) {
+    }
     async fn webhooks_update(&self, _ctx: Context, _event: crate::event::WebhooksUpdateEvent) {}
     async fn invite_create(&self, _ctx: Context, _event: crate::event::InviteEvent) {}
     async fn invite_delete(&self, _ctx: Context, _event: crate::event::InviteEvent) {}
@@ -564,7 +648,12 @@ pub trait EventHandler: Send + Sync + 'static {
     async fn voice_server_update(&self, _ctx: Context, _data: crate::model::VoiceServerUpdate) {}
     async fn reaction_add(&self, _ctx: Context, _data: crate::event::ReactionEvent) {}
     async fn reaction_remove(&self, _ctx: Context, _data: crate::event::ReactionEvent) {}
-    async fn reaction_remove_all(&self, _ctx: Context, _event: crate::event::ReactionRemoveAllEvent) {}
+    async fn reaction_remove_all(
+        &self,
+        _ctx: Context,
+        _event: crate::event::ReactionRemoveAllEvent,
+    ) {
+    }
     async fn typing_start(&self, _ctx: Context, _data: crate::event::TypingStartEvent) {}
     async fn presence_update(&self, _ctx: Context, _data: crate::event::PresenceUpdateEvent) {}
     async fn interaction_create(&self, _ctx: Context, _interaction: crate::model::Interaction) {}
@@ -738,7 +827,10 @@ impl ClientBuilder {
 pub struct Client;
 
 impl Client {
-    pub fn builder(token: impl Into<String>, intents: impl Into<crate::bitfield::Intents>) -> ClientBuilder {
+    pub fn builder(
+        token: impl Into<String>,
+        intents: impl Into<crate::bitfield::Intents>,
+    ) -> ClientBuilder {
         ClientBuilder {
             token: token.into(),
             intents: intents.into().bits(),
@@ -1244,17 +1336,17 @@ mod tests {
     #[cfg(feature = "sharding")]
     use tokio::time::{sleep, Duration};
 
-    use super::{EventHandler, ShardMessenger};
     #[cfg(feature = "sharding")]
     use super::{auto_shard_plan, ShardSupervisor};
+    use super::{EventHandler, ShardMessenger};
     use crate::event::{
         decode_event, BulkMessageDeleteEvent, Event, MessageEvent, ReadyEvent, ReadyPayload,
     };
     use crate::gateway::client::GatewayCommand;
     use crate::http::DiscordHttpClient;
-    use crate::model::{Interaction, Message, Snowflake, User};
     #[cfg(feature = "sharding")]
     use crate::model::{GatewayBot, SessionStartLimit};
+    use crate::model::{Interaction, Message, Snowflake, User};
     #[cfg(feature = "sharding")]
     use crate::sharding::{ShardConfig, ShardingManager};
 

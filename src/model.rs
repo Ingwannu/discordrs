@@ -774,64 +774,6 @@ pub struct ThreadMetadata {
     pub locked: bool,
 }
 
-#[cfg(test)]
-mod tests {
-    use serde_json::json;
-
-    use super::{ApplicationCommandOptionChoice, PermissionsBitField, Snowflake, User};
-
-    #[test]
-    fn snowflake_deserializes_from_string_and_number() {
-        let string_value: Snowflake = serde_json::from_value(json!("123")).unwrap();
-        let number_value: Snowflake = serde_json::from_value(json!(123)).unwrap();
-
-        assert_eq!(string_value.as_str(), "123");
-        assert_eq!(number_value.as_str(), "123");
-    }
-
-    #[test]
-    fn permissions_round_trip_through_string_wire_format() {
-        let permissions = PermissionsBitField(8);
-        let json = serde_json::to_value(permissions).unwrap();
-        assert_eq!(json, json!("8"));
-
-        let parsed: PermissionsBitField = serde_json::from_value(json).unwrap();
-        assert_eq!(parsed.bits(), 8);
-    }
-
-    #[test]
-    fn typed_models_keep_wire_shape() {
-        let user: User = serde_json::from_value(json!({
-            "id": "42",
-            "username": "discordrs",
-            "global_name": "discordrs"
-        }))
-        .unwrap();
-
-        let serialized = serde_json::to_value(&user).unwrap();
-        assert_eq!(serialized["id"], json!("42"));
-        assert_eq!(serialized["username"], json!("discordrs"));
-    }
-
-    #[test]
-    fn application_command_option_choice_new_serializes_value() {
-        let choice = ApplicationCommandOptionChoice::new("Support", "support");
-        let serialized = serde_json::to_value(choice).unwrap();
-
-        assert_eq!(serialized["name"], json!("Support"));
-        assert_eq!(serialized["value"], json!("support"));
-    }
-
-    #[test]
-    fn snowflake_timestamp_extracts_creation_time() {
-        // Discord Snowflake: timestamp is in the top 42 bits
-        let sf = Snowflake::from(1759288472266248192u64);
-        let ts = sf.timestamp().expect("should extract timestamp");
-        // Should be a reasonable Unix timestamp (after 2020)
-        assert!(ts > 1_577_836_800_000u64); // after 2020-01-01
-    }
-}
-
 // --- DiscordModel trait ---
 
 /// Trait for all Discord data models that have a Snowflake ID.
@@ -889,5 +831,63 @@ impl DiscordModel for ApplicationCommand {
         // ApplicationCommand.id is Option<Snowflake>, so we need a fallback
         static EMPTY: Snowflake = Snowflake(String::new());
         self.id.as_ref().unwrap_or(&EMPTY)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::{ApplicationCommandOptionChoice, PermissionsBitField, Snowflake, User};
+
+    #[test]
+    fn snowflake_deserializes_from_string_and_number() {
+        let string_value: Snowflake = serde_json::from_value(json!("123")).unwrap();
+        let number_value: Snowflake = serde_json::from_value(json!(123)).unwrap();
+
+        assert_eq!(string_value.as_str(), "123");
+        assert_eq!(number_value.as_str(), "123");
+    }
+
+    #[test]
+    fn permissions_round_trip_through_string_wire_format() {
+        let permissions = PermissionsBitField(8);
+        let json = serde_json::to_value(permissions).unwrap();
+        assert_eq!(json, json!("8"));
+
+        let parsed: PermissionsBitField = serde_json::from_value(json).unwrap();
+        assert_eq!(parsed.bits(), 8);
+    }
+
+    #[test]
+    fn typed_models_keep_wire_shape() {
+        let user: User = serde_json::from_value(json!({
+            "id": "42",
+            "username": "discordrs",
+            "global_name": "discordrs"
+        }))
+        .unwrap();
+
+        let serialized = serde_json::to_value(&user).unwrap();
+        assert_eq!(serialized["id"], json!("42"));
+        assert_eq!(serialized["username"], json!("discordrs"));
+    }
+
+    #[test]
+    fn application_command_option_choice_new_serializes_value() {
+        let choice = ApplicationCommandOptionChoice::new("Support", "support");
+        let serialized = serde_json::to_value(choice).unwrap();
+
+        assert_eq!(serialized["name"], json!("Support"));
+        assert_eq!(serialized["value"], json!("support"));
+    }
+
+    #[test]
+    fn snowflake_timestamp_extracts_creation_time() {
+        // Discord Snowflake: timestamp is in the top 42 bits
+        let sf = Snowflake::from(1759288472266248192u64);
+        let ts = sf.timestamp().expect("should extract timestamp");
+        // Should be a reasonable Unix timestamp (after 2020)
+        assert!(ts > 1_577_836_800_000u64); // after 2020-01-01
     }
 }

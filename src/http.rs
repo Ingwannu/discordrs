@@ -15,11 +15,11 @@ use serde_json::Value;
 use tracing::{debug, warn};
 
 use crate::command::CommandDefinition;
+use crate::error::DiscordError;
 use crate::model::{
     ApplicationCommand, Channel, CreateDmChannel, CreateMessage, GatewayBot, Guild,
     InteractionCallbackResponse, Member, Message, Role, Snowflake,
 };
-use crate::error::DiscordError;
 use crate::types::invalid_data_error;
 
 const API_BASE: &str = "https://discord.com/api/v10";
@@ -99,7 +99,10 @@ impl RestClient {
         .await
     }
 
-    pub async fn get_channel(&self, channel_id: impl Into<Snowflake>) -> Result<Channel, DiscordError> {
+    pub async fn get_channel(
+        &self,
+        channel_id: impl Into<Snowflake>,
+    ) -> Result<Channel, DiscordError> {
         self.request_typed(
             Method::GET,
             &format!("/channels/{}", channel_id.into()),
@@ -108,7 +111,10 @@ impl RestClient {
         .await
     }
 
-    pub async fn delete_channel(&self, channel_id: impl Into<Snowflake>) -> Result<Channel, DiscordError> {
+    pub async fn delete_channel(
+        &self,
+        channel_id: impl Into<Snowflake>,
+    ) -> Result<Channel, DiscordError> {
         self.request_typed(
             Method::DELETE,
             &format!("/channels/{}", channel_id.into()),
@@ -117,7 +123,11 @@ impl RestClient {
         .await
     }
 
-    pub async fn update_channel(&self, channel_id: impl Into<Snowflake>, body: &Value) -> Result<Channel, DiscordError> {
+    pub async fn update_channel(
+        &self,
+        channel_id: impl Into<Snowflake>,
+        body: &Value,
+    ) -> Result<Channel, DiscordError> {
         self.request_typed(
             Method::PATCH,
             &format!("/channels/{}", channel_id.into()),
@@ -126,27 +136,63 @@ impl RestClient {
         .await
     }
 
-    pub async fn get_channel_messages(&self, channel_id: impl Into<Snowflake>, limit: Option<u64>) -> Result<Vec<Message>, DiscordError> {
+    pub async fn get_channel_messages(
+        &self,
+        channel_id: impl Into<Snowflake>,
+        limit: Option<u64>,
+    ) -> Result<Vec<Message>, DiscordError> {
         let path = match limit {
             Some(l) => format!("/channels/{}/messages?limit={}", channel_id.into(), l),
             None => format!("/channels/{}/messages", channel_id.into()),
         };
-        self.request_typed(Method::GET, &path, Option::<&Value>::None).await
+        self.request_typed(Method::GET, &path, Option::<&Value>::None)
+            .await
     }
 
-    pub async fn bulk_delete_messages(&self, channel_id: impl Into<Snowflake>, message_ids: Vec<Snowflake>) -> Result<(), DiscordError> {
+    pub async fn bulk_delete_messages(
+        &self,
+        channel_id: impl Into<Snowflake>,
+        message_ids: Vec<Snowflake>,
+    ) -> Result<(), DiscordError> {
         let body = serde_json::json!({ "messages": message_ids.iter().map(|id| id.as_str()).collect::<Vec<_>>() });
-        self.request_no_content(Method::POST, &format!("/channels/{}/messages/bulk-delete", channel_id.into()), Some(&body)).await
+        self.request_no_content(
+            Method::POST,
+            &format!("/channels/{}/messages/bulk-delete", channel_id.into()),
+            Some(&body),
+        )
+        .await
     }
 
-    pub async fn add_reaction(&self, channel_id: impl Into<Snowflake>, message_id: impl Into<Snowflake>, emoji: &str) -> Result<(), DiscordError> {
-        let path = format!("/channels/{}/messages/{}/reactions/{}/@me", channel_id.into(), message_id.into(), emoji);
-        self.request_no_content(Method::PUT, &path, Option::<&Value>::None).await
+    pub async fn add_reaction(
+        &self,
+        channel_id: impl Into<Snowflake>,
+        message_id: impl Into<Snowflake>,
+        emoji: &str,
+    ) -> Result<(), DiscordError> {
+        let path = format!(
+            "/channels/{}/messages/{}/reactions/{}/@me",
+            channel_id.into(),
+            message_id.into(),
+            emoji
+        );
+        self.request_no_content(Method::PUT, &path, Option::<&Value>::None)
+            .await
     }
 
-    pub async fn remove_reaction(&self, channel_id: impl Into<Snowflake>, message_id: impl Into<Snowflake>, emoji: &str) -> Result<(), DiscordError> {
-        let path = format!("/channels/{}/messages/{}/reactions/{}/@me", channel_id.into(), message_id.into(), emoji);
-        self.request_no_content(Method::DELETE, &path, Option::<&Value>::None).await
+    pub async fn remove_reaction(
+        &self,
+        channel_id: impl Into<Snowflake>,
+        message_id: impl Into<Snowflake>,
+        emoji: &str,
+    ) -> Result<(), DiscordError> {
+        let path = format!(
+            "/channels/{}/messages/{}/reactions/{}/@me",
+            channel_id.into(),
+            message_id.into(),
+            emoji
+        );
+        self.request_no_content(Method::DELETE, &path, Option::<&Value>::None)
+            .await
     }
 
     pub async fn get_guild(&self, guild_id: impl Into<Snowflake>) -> Result<Guild, DiscordError> {
@@ -158,7 +204,11 @@ impl RestClient {
         .await
     }
 
-    pub async fn update_guild(&self, guild_id: impl Into<Snowflake>, body: &Value) -> Result<Guild, DiscordError> {
+    pub async fn update_guild(
+        &self,
+        guild_id: impl Into<Snowflake>,
+        body: &Value,
+    ) -> Result<Guild, DiscordError> {
         self.request_typed(
             Method::PATCH,
             &format!("/guilds/{}", guild_id.into()),
@@ -167,7 +217,10 @@ impl RestClient {
         .await
     }
 
-    pub async fn get_guild_channels(&self, guild_id: impl Into<Snowflake>) -> Result<Vec<Channel>, DiscordError> {
+    pub async fn get_guild_channels(
+        &self,
+        guild_id: impl Into<Snowflake>,
+    ) -> Result<Vec<Channel>, DiscordError> {
         self.request_typed(
             Method::GET,
             &format!("/guilds/{}/channels", guild_id.into()),
@@ -176,7 +229,11 @@ impl RestClient {
         .await
     }
 
-    pub async fn create_guild_channel(&self, guild_id: impl Into<Snowflake>, body: &Value) -> Result<Channel, DiscordError> {
+    pub async fn create_guild_channel(
+        &self,
+        guild_id: impl Into<Snowflake>,
+        body: &Value,
+    ) -> Result<Channel, DiscordError> {
         self.request_typed(
             Method::POST,
             &format!("/guilds/{}/channels", guild_id.into()),
@@ -185,15 +242,24 @@ impl RestClient {
         .await
     }
 
-    pub async fn get_guild_members(&self, guild_id: impl Into<Snowflake>, limit: Option<u64>) -> Result<Vec<Member>, DiscordError> {
+    pub async fn get_guild_members(
+        &self,
+        guild_id: impl Into<Snowflake>,
+        limit: Option<u64>,
+    ) -> Result<Vec<Member>, DiscordError> {
         let path = match limit {
             Some(l) => format!("/guilds/{}/members?limit={}", guild_id.into(), l),
             None => format!("/guilds/{}/members", guild_id.into()),
         };
-        self.request_typed(Method::GET, &path, Option::<&Value>::None).await
+        self.request_typed(Method::GET, &path, Option::<&Value>::None)
+            .await
     }
 
-    pub async fn remove_guild_member(&self, guild_id: impl Into<Snowflake>, user_id: impl Into<Snowflake>) -> Result<(), DiscordError> {
+    pub async fn remove_guild_member(
+        &self,
+        guild_id: impl Into<Snowflake>,
+        user_id: impl Into<Snowflake>,
+    ) -> Result<(), DiscordError> {
         self.request_no_content(
             Method::DELETE,
             &format!("/guilds/{}/members/{}", guild_id.into(), user_id.into()),
@@ -202,25 +268,49 @@ impl RestClient {
         .await
     }
 
-    pub async fn add_guild_member_role(&self, guild_id: impl Into<Snowflake>, user_id: impl Into<Snowflake>, role_id: impl Into<Snowflake>) -> Result<(), DiscordError> {
+    pub async fn add_guild_member_role(
+        &self,
+        guild_id: impl Into<Snowflake>,
+        user_id: impl Into<Snowflake>,
+        role_id: impl Into<Snowflake>,
+    ) -> Result<(), DiscordError> {
         self.request_no_content(
             Method::PUT,
-            &format!("/guilds/{}/members/{}/roles/{}", guild_id.into(), user_id.into(), role_id.into()),
+            &format!(
+                "/guilds/{}/members/{}/roles/{}",
+                guild_id.into(),
+                user_id.into(),
+                role_id.into()
+            ),
             Option::<&Value>::None,
         )
         .await
     }
 
-    pub async fn remove_guild_member_role(&self, guild_id: impl Into<Snowflake>, user_id: impl Into<Snowflake>, role_id: impl Into<Snowflake>) -> Result<(), DiscordError> {
+    pub async fn remove_guild_member_role(
+        &self,
+        guild_id: impl Into<Snowflake>,
+        user_id: impl Into<Snowflake>,
+        role_id: impl Into<Snowflake>,
+    ) -> Result<(), DiscordError> {
         self.request_no_content(
             Method::DELETE,
-            &format!("/guilds/{}/members/{}/roles/{}", guild_id.into(), user_id.into(), role_id.into()),
+            &format!(
+                "/guilds/{}/members/{}/roles/{}",
+                guild_id.into(),
+                user_id.into(),
+                role_id.into()
+            ),
             Option::<&Value>::None,
         )
         .await
     }
 
-    pub async fn create_role(&self, guild_id: impl Into<Snowflake>, body: &Value) -> Result<Role, DiscordError> {
+    pub async fn create_role(
+        &self,
+        guild_id: impl Into<Snowflake>,
+        body: &Value,
+    ) -> Result<Role, DiscordError> {
         self.request_typed(
             Method::POST,
             &format!("/guilds/{}/roles", guild_id.into()),
@@ -229,7 +319,12 @@ impl RestClient {
         .await
     }
 
-    pub async fn update_role(&self, guild_id: impl Into<Snowflake>, role_id: impl Into<Snowflake>, body: &Value) -> Result<Role, DiscordError> {
+    pub async fn update_role(
+        &self,
+        guild_id: impl Into<Snowflake>,
+        role_id: impl Into<Snowflake>,
+        body: &Value,
+    ) -> Result<Role, DiscordError> {
         self.request_typed(
             Method::PATCH,
             &format!("/guilds/{}/roles/{}", guild_id.into(), role_id.into()),
@@ -238,7 +333,11 @@ impl RestClient {
         .await
     }
 
-    pub async fn delete_role(&self, guild_id: impl Into<Snowflake>, role_id: impl Into<Snowflake>) -> Result<(), DiscordError> {
+    pub async fn delete_role(
+        &self,
+        guild_id: impl Into<Snowflake>,
+        role_id: impl Into<Snowflake>,
+    ) -> Result<(), DiscordError> {
         self.request_no_content(
             Method::DELETE,
             &format!("/guilds/{}/roles/{}", guild_id.into(), role_id.into()),
@@ -260,7 +359,10 @@ impl RestClient {
         .await
     }
 
-    pub async fn list_roles(&self, guild_id: impl Into<Snowflake>) -> Result<Vec<Role>, DiscordError> {
+    pub async fn list_roles(
+        &self,
+        guild_id: impl Into<Snowflake>,
+    ) -> Result<Vec<Role>, DiscordError> {
         self.request_typed(
             Method::GET,
             &format!("/guilds/{}/roles", guild_id.into()),
@@ -269,23 +371,54 @@ impl RestClient {
         .await
     }
 
-    pub async fn create_webhook(&self, channel_id: impl Into<Snowflake>, body: &Value) -> Result<Value, DiscordError> {
-        self.request(Method::POST, &format!("/channels/{}/webhooks", channel_id.into()), Some(body)).await
+    pub async fn create_webhook(
+        &self,
+        channel_id: impl Into<Snowflake>,
+        body: &Value,
+    ) -> Result<Value, DiscordError> {
+        self.request(
+            Method::POST,
+            &format!("/channels/{}/webhooks", channel_id.into()),
+            Some(body),
+        )
+        .await
     }
 
-    pub async fn get_channel_webhooks(&self, channel_id: impl Into<Snowflake>) -> Result<Vec<Value>, DiscordError> {
-        let response = self.request(Method::GET, &format!("/channels/{}/webhooks", channel_id.into()), Option::<&Value>::None).await?;
+    pub async fn get_channel_webhooks(
+        &self,
+        channel_id: impl Into<Snowflake>,
+    ) -> Result<Vec<Value>, DiscordError> {
+        let response = self
+            .request(
+                Method::GET,
+                &format!("/channels/{}/webhooks", channel_id.into()),
+                Option::<&Value>::None,
+            )
+            .await?;
         match response {
             Value::Array(webhooks) => Ok(webhooks),
             _ => Ok(vec![]),
         }
     }
 
-    pub async fn execute_webhook(&self, webhook_id: impl Into<Snowflake>, token: &str, body: &Value) -> Result<Value, DiscordError> {
-        self.request(Method::POST, &format!("/webhooks/{}/{}?wait=true", webhook_id.into(), token), Some(body)).await
+    pub async fn execute_webhook(
+        &self,
+        webhook_id: impl Into<Snowflake>,
+        token: &str,
+        body: &Value,
+    ) -> Result<Value, DiscordError> {
+        self.request(
+            Method::POST,
+            &format!("/webhooks/{}/{}?wait=true", webhook_id.into(), token),
+            Some(body),
+        )
+        .await
     }
 
-    pub async fn create_dm_channel_typed(&self, body: &CreateDmChannel) -> Result<Channel, DiscordError> {
+    pub async fn create_dm_channel_typed(
+        &self,
+        body: &CreateDmChannel,
+    ) -> Result<Channel, DiscordError> {
         self.request_typed(Method::POST, "/users/@me/channels", Some(body))
             .await
     }
@@ -312,12 +445,7 @@ impl RestClient {
         commands: &[CommandDefinition],
     ) -> Result<Vec<ApplicationCommand>, DiscordError> {
         let path = global_commands_path(self.application_id())?;
-        self.request_typed(
-            Method::PUT,
-            &path,
-            Some(commands),
-        )
-        .await
+        self.request_typed(Method::PUT, &path, Some(commands)).await
     }
 
     pub async fn create_global_command(
@@ -325,22 +453,13 @@ impl RestClient {
         command: &CommandDefinition,
     ) -> Result<ApplicationCommand, DiscordError> {
         let path = global_commands_path(self.application_id())?;
-        self.request_typed(
-            Method::POST,
-            &path,
-            Some(command),
-        )
-        .await
+        self.request_typed(Method::POST, &path, Some(command)).await
     }
 
     pub async fn get_global_commands(&self) -> Result<Vec<ApplicationCommand>, DiscordError> {
         let path = global_commands_path(self.application_id())?;
-        self.request_typed(
-            Method::GET,
-            &path,
-            Option::<&Value>::None,
-        )
-        .await
+        self.request_typed(Method::GET, &path, Option::<&Value>::None)
+            .await
     }
 
     pub async fn get_gateway_bot(&self) -> Result<GatewayBot, DiscordError> {
@@ -388,7 +507,11 @@ impl RestClient {
         .await
     }
 
-    pub async fn delete_message(&self, channel_id: u64, message_id: u64) -> Result<(), DiscordError> {
+    pub async fn delete_message(
+        &self,
+        channel_id: u64,
+        message_id: u64,
+    ) -> Result<(), DiscordError> {
         self.request_no_content(
             Method::DELETE,
             &format!("/channels/{channel_id}/messages/{message_id}"),
@@ -563,9 +686,7 @@ impl RestClient {
     ) -> Result<Vec<Value>, DiscordError> {
         let path = global_commands_path(self.application_id())?;
         let body = Value::Array(commands);
-        let response = self
-            .request(Method::PUT, &path, Some(&body))
-            .await?;
+        let response = self.request(Method::PUT, &path, Some(&body)).await?;
 
         match response {
             Value::Array(commands) => Ok(commands),
@@ -1045,11 +1166,10 @@ mod tests {
         let blocked_route = rate_limit_route_key(&Method::GET, "/channels/123/messages/456");
         let other_route = rate_limit_route_key(&Method::GET, "/channels/999/messages/456");
 
-        state
-            .blocked_until
-            .lock()
-            .unwrap()
-            .insert(blocked_route.clone(), Instant::now() + Duration::from_secs(1));
+        state.blocked_until.lock().unwrap().insert(
+            blocked_route.clone(),
+            Instant::now() + Duration::from_secs(1),
+        );
 
         assert!(state.wait_duration(&blocked_route).is_some());
         assert!(state.wait_duration(&other_route).is_none());

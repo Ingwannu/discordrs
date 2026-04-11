@@ -10,13 +10,13 @@ pub mod cache;
 pub mod collection;
 #[cfg(feature = "collectors")]
 pub mod collector;
-pub mod manager;
 pub mod command;
 pub mod constants;
 pub mod error;
 pub mod event;
 pub mod helpers;
 pub mod http;
+pub mod manager;
 pub mod model;
 pub mod parsers;
 pub mod prelude;
@@ -40,18 +40,19 @@ pub mod interactions;
 pub use cache::{
     CacheHandle, ChannelManager, GuildManager, MemberManager, MessageManager, RoleManager,
 };
-pub use manager::CachedManager;
 pub use collection::Collection;
 pub use command::{
     command_type, option_type, CommandDefinition, CommandOptionBuilder, MessageCommandBuilder,
     SlashCommandBuilder, UserCommandBuilder,
 };
+pub use error::{DiscordError, HttpError};
 pub use event::{
     decode_event, ChannelEvent, Event, GuildDeleteEvent, GuildDeletePayload, GuildEvent,
     InteractionEvent, MemberEvent, MemberRemoveEvent, MemberRemovePayload, MessageDeleteEvent,
     MessageDeletePayload, MessageEvent, ReadyEvent, ReadyPayload, RoleDeleteEvent,
     RoleDeletePayload, RoleEvent, VoiceServerEvent, VoiceStateEvent,
 };
+pub use manager::CachedManager;
 pub use model::{
     ApplicationCommand, ApplicationCommandOption, ApplicationCommandOptionChoice, Attachment,
     AutocompleteInteraction, Channel, ChatInputCommandInteraction, ComponentInteraction,
@@ -67,13 +68,12 @@ pub use sharding::{
     ShardSupervisorEvent, ShardingManager,
 };
 pub use types::{ButtonConfig, Emoji, MediaGalleryItem, MediaInfo, SelectOption};
-pub use error::{DiscordError, HttpError};
 /// Backward-compatible alias. Prefer `DiscordError`.
 #[deprecated(since = "0.4.0", note = "Use DiscordError instead")]
 pub type Error = DiscordError;
 pub use bitfield::{
-    BitField, BitFieldFlags, Intents, IntentFlags, Permissions, PermissionFlags, MessageFlags,
-    MessageFlagBits,
+    BitField, BitFieldFlags, IntentFlags, Intents, MessageFlagBits, MessageFlags, PermissionFlags,
+    Permissions,
 };
 #[cfg(feature = "voice")]
 pub use voice::{
