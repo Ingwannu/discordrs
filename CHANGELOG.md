@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased
+
+- **BREAKING**: Removed the legacy raw `RestClient` convenience methods (`send_message`, `edit_message`, `create_dm_channel`, `create_interaction_response`, and `bulk_overwrite_global_commands`) from the public API. The typed `RestClient` surface is now the supported path, and internal JSON helpers remain crate-private.
+- **BREAKING**: Builder implementation submodules are now private. Import builders from `discordrs::builders::{...}` or the crate root re-exports instead of deeper paths such as `discordrs::builders::modal::*`.
+- **BREAKING**: `ApplicationCommand` no longer implements `DiscordModel`. Use `ApplicationCommand::id_opt()` and `ApplicationCommand::created_at()` for optional-ID command values.
+- Changed gateway event processing to preserve ordering through a dedicated event processor instead of unbounded per-event task spawning.
+- Changed unsupported gateway `compress=zlib-stream` configuration to be stripped from normalized URLs so the runtime no longer advertises a mode it cannot process.
+- Changed interaction request verification to reject stale or future timestamps outside a five-minute freshness window.
+- Hardened token-authenticated callback/webhook HTTP paths by rejecting unsafe path segments and omitting bot `Authorization` headers from `/interactions/...` and `/webhooks/...` requests.
+- Fixed gateway Identify/Resume payloads to use the raw Discord token instead of an HTTP-style `Bot ` prefix.
+- Fixed REST error typing so Discord API failures now surface as `DiscordError::Api` / `DiscordError::RateLimit` instead of collapsing into model errors.
+- Fixed typed command and autocomplete interactions to preserve nested option `value` / `focused` input data through `CommandInteractionOption`.
+- Changed voice state handling to clear stale runtime/session state on disconnect and endpoint loss.
+- Fixed stale interaction examples in `USAGE.md` to match the current typed helper and typed endpoint APIs.
+- Added README / USAGE migration notes for the tightened public API surface and canonical replacement paths.
+
 ## 0.4.0
 
 - Fixed gateway cache consistency after the upgrade: `READY` now clears stale cache state, `MESSAGE_UPDATE` merges partial payloads into cached messages instead of wiping fields, and guild/channel/bulk-delete paths now evict dependent cached entries.

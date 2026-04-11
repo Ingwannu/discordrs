@@ -1,8 +1,11 @@
-pub mod components;
-pub mod container;
-pub mod embed;
-pub mod media;
-pub mod modal;
+//! Canonical builder imports live on `discordrs::builders::{...}` and the crate root re-exports.
+//! The submodules below are implementation detail modules behind those stable re-exports.
+
+mod components;
+mod container;
+mod embed;
+mod media;
+mod modal;
 
 pub use components::{ActionRowBuilder, ButtonBuilder, ComponentsV2Message, SelectMenuBuilder};
 pub use container::{

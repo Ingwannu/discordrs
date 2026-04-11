@@ -58,7 +58,7 @@ pub async fn send_container_message(
     container: ContainerBuilder,
 ) -> Result<Value, DiscordError> {
     let body = ComponentsV2Payload::new(vec![container.build()]).into_value();
-    http.send_message(channel_id, &body).await
+    http.send_message_json(channel_id, &body).await
 }
 
 pub async fn send_message(
@@ -96,7 +96,7 @@ pub async fn respond_with_container(
         "data": data,
     });
 
-    http.create_interaction_response(interaction_id, interaction_token, &response)
+    http.create_interaction_response_json(interaction_id, interaction_token, &response)
         .await
 }
 
@@ -145,7 +145,7 @@ pub async fn respond_component_with_container(
         "data": data,
     });
 
-    http.create_interaction_response(interaction_id, interaction_token, &response)
+    http.create_interaction_response_json(interaction_id, interaction_token, &response)
         .await
 }
 
@@ -164,7 +164,7 @@ pub async fn respond_modal_with_container(
         "data": data,
     });
 
-    http.create_interaction_response(interaction_id, interaction_token, &response)
+    http.create_interaction_response_json(interaction_id, interaction_token, &response)
         .await
 }
 
@@ -177,7 +177,8 @@ pub async fn followup_with_container(
     let body = ComponentsV2Payload::new(vec![container.build()])
         .ephemeral(ephemeral)
         .into_value();
-    http.create_followup_message(interaction_token, &body).await
+    http.create_followup_message_json(interaction_token, &body)
+        .await
 }
 
 pub async fn followup_message(
@@ -185,16 +186,15 @@ pub async fn followup_message(
     context: &InteractionContextData,
     mut message: CreateMessage,
     ephemeral: bool,
-) -> Result<Value, DiscordError> {
+) -> Result<Message, DiscordError> {
     if ephemeral {
         message.flags = Some(message.flags.unwrap_or(0) | (1 << 6));
     }
 
-    let body = serde_json::to_value(message)?;
     http.create_followup_message_with_application_id(
         context.application_id.as_str(),
         &context.token,
-        &body,
+        &message,
     )
     .await
 }
@@ -215,11 +215,10 @@ pub async fn edit_original_response(
     context: &InteractionContextData,
     message: CreateMessage,
 ) -> Result<Message, DiscordError> {
-    let body = serde_json::to_value(message)?;
     http.edit_original_interaction_response_with_application_id(
         context.application_id.as_str(),
         &context.token,
-        &body,
+        &message,
     )
     .await
 }
@@ -255,7 +254,7 @@ pub async fn edit_message_with_container(
     container: ContainerBuilder,
 ) -> Result<Value, DiscordError> {
     let body = ComponentsV2Payload::new(vec![container.build()]).into_value();
-    http.edit_message(channel_id, message_id, &body).await
+    http.edit_message_json(channel_id, message_id, &body).await
 }
 
 pub async fn update_component_with_container(
@@ -270,7 +269,7 @@ pub async fn update_component_with_container(
         "data": data,
     });
 
-    http.create_interaction_response(interaction_id, interaction_token, &response)
+    http.create_interaction_response_json(interaction_id, interaction_token, &response)
         .await
 }
 
@@ -285,7 +284,7 @@ pub async fn respond_with_modal(
         "data": modal.build(),
     });
 
-    http.create_interaction_response(interaction_id, interaction_token, &response)
+    http.create_interaction_response_json(interaction_id, interaction_token, &response)
         .await
 }
 
@@ -397,7 +396,7 @@ pub async fn defer_and_followup_container(
         "data": { "flags": flags },
     });
 
-    http.create_interaction_response(interaction_id, interaction_token, &defer_data)
+    http.create_interaction_response_json(interaction_id, interaction_token, &defer_data)
         .await?;
 
     followup_with_container(http, interaction_token, container, ephemeral).await
@@ -409,7 +408,7 @@ pub async fn send_components_v2(
     message: ComponentsV2Message,
 ) -> Result<Value, DiscordError> {
     let body = ComponentsV2Payload::new(message.build()).into_value();
-    http.send_message(channel_id, &body).await
+    http.send_message_json(channel_id, &body).await
 }
 
 pub async fn respond_with_components_v2(
@@ -427,7 +426,7 @@ pub async fn respond_with_components_v2(
         "data": data,
     });
 
-    http.create_interaction_response(interaction_id, interaction_token, &response)
+    http.create_interaction_response_json(interaction_id, interaction_token, &response)
         .await
 }
 
@@ -446,7 +445,7 @@ pub async fn respond_component_with_components_v2(
         "data": data,
     });
 
-    http.create_interaction_response(interaction_id, interaction_token, &response)
+    http.create_interaction_response_json(interaction_id, interaction_token, &response)
         .await
 }
 

@@ -407,12 +407,8 @@ impl RestClient {
         token: &str,
         body: &Value,
     ) -> Result<Value, DiscordError> {
-        self.request(
-            Method::POST,
-            &format!("/webhooks/{}/{}?wait=true", webhook_id.into(), token),
-            Some(body),
-        )
-        .await
+        let path = execute_webhook_path(webhook_id.into(), token)?;
+        self.request(Method::POST, &path, Some(body)).await
     }
 
     pub async fn create_dm_channel_typed(
@@ -429,15 +425,8 @@ impl RestClient {
         interaction_token: &str,
         body: &InteractionCallbackResponse,
     ) -> Result<(), DiscordError> {
-        self.request_no_content(
-            Method::POST,
-            &format!(
-                "/interactions/{}/{interaction_token}/callback",
-                interaction_id.into()
-            ),
-            Some(body),
-        )
-        .await
+        let path = interaction_callback_path(interaction_id.into(), interaction_token)?;
+        self.request_no_content(Method::POST, &path, Some(body)).await
     }
 
     pub async fn bulk_overwrite_global_commands_typed(
@@ -484,24 +473,32 @@ impl RestClient {
         .await
     }
 
-    pub async fn send_message(&self, channel_id: u64, body: &Value) -> Result<Value, DiscordError> {
+    pub(crate) async fn send_message_json(
+        &self,
+        channel_id: impl Into<Snowflake>,
+        body: &Value,
+    ) -> Result<Value, DiscordError> {
         self.request(
             Method::POST,
-            &format!("/channels/{channel_id}/messages"),
+            &format!("/channels/{}/messages", channel_id.into()),
             Some(body),
         )
         .await
     }
 
-    pub async fn edit_message(
+    pub(crate) async fn edit_message_json(
         &self,
-        channel_id: u64,
-        message_id: u64,
+        channel_id: impl Into<Snowflake>,
+        message_id: impl Into<Snowflake>,
         body: &Value,
     ) -> Result<Value, DiscordError> {
         self.request(
             Method::PATCH,
-            &format!("/channels/{channel_id}/messages/{message_id}"),
+            &format!(
+                "/channels/{}/messages/{}",
+                channel_id.into(),
+                message_id.into()
+            ),
             Some(body),
         )
         .await
@@ -509,42 +506,61 @@ impl RestClient {
 
     pub async fn delete_message(
         &self,
-        channel_id: u64,
-        message_id: u64,
+        channel_id: impl Into<Snowflake>,
+        message_id: impl Into<Snowflake>,
     ) -> Result<(), DiscordError> {
         self.request_no_content(
             Method::DELETE,
-            &format!("/channels/{channel_id}/messages/{message_id}"),
+            &format!(
+                "/channels/{}/messages/{}",
+                channel_id.into(),
+                message_id.into()
+            ),
             Option::<&Value>::None,
         )
         .await
     }
 
-    pub async fn create_dm_channel(&self, user_id: u64) -> Result<Value, DiscordError> {
-        let body = serde_json::json!({ "recipient_id": user_id.to_string() });
-        self.request(Method::POST, "/users/@me/channels", Some(&body))
-            .await
-    }
-
-    pub async fn create_interaction_response(
+    pub(crate) async fn create_interaction_response_json(
         &self,
-        interaction_id: &str,
+        interaction_id: impl Into<Snowflake>,
         interaction_token: &str,
         body: &Value,
     ) -> Result<(), DiscordError> {
-        self.request_no_content(
-            Method::POST,
-            &format!("/interactions/{interaction_id}/{interaction_token}/callback"),
-            Some(body),
+        let path = interaction_callback_path(interaction_id.into(), interaction_token)?;
+        self.request_no_content(Method::POST, &path, Some(body))
+            .await
+    }
+
+    pub(crate) async fn create_followup_message_json(
+        &self,
+        interaction_token: &str,
+        body: &Value,
+    ) -> Result<Value, DiscordError> {
+        let application_id = configured_application_id(self.application_id())?;
+        self.create_followup_message_json_with_application_id(
+            &application_id,
+            interaction_token,
+            body,
         )
         .await
+    }
+
+    pub(crate) async fn create_followup_message_json_with_application_id(
+        &self,
+        application_id: &str,
+        interaction_token: &str,
+        body: &Value,
+    ) -> Result<Value, DiscordError> {
+        let path = followup_webhook_path(application_id, interaction_token, None)?;
+        self.request(Method::POST, &path, Some(body)).await
     }
 
     pub async fn create_followup_message(
         &self,
         interaction_token: &str,
-        body: &Value,
-    ) -> Result<Value, DiscordError> {
+        body: &CreateMessage,
+    ) -> Result<Message, DiscordError> {
         let application_id = configured_application_id(self.application_id())?;
         self.create_followup_message_with_application_id(&application_id, interaction_token, body)
             .await
@@ -554,10 +570,10 @@ impl RestClient {
         &self,
         application_id: &str,
         interaction_token: &str,
-        body: &Value,
-    ) -> Result<Value, DiscordError> {
+        body: &CreateMessage,
+    ) -> Result<Message, DiscordError> {
         let path = followup_webhook_path(application_id, interaction_token, None)?;
-        self.request(Method::POST, &path, Some(body)).await
+        self.request_typed(Method::POST, &path, Some(body)).await
     }
 
     pub async fn get_original_interaction_response(
@@ -585,7 +601,7 @@ impl RestClient {
     pub async fn edit_original_interaction_response(
         &self,
         interaction_token: &str,
-        body: &Value,
+        body: &CreateMessage,
     ) -> Result<Message, DiscordError> {
         let application_id = configured_application_id(self.application_id())?;
         self.edit_original_interaction_response_with_application_id(
@@ -600,7 +616,7 @@ impl RestClient {
         &self,
         application_id: &str,
         interaction_token: &str,
-        body: &Value,
+        body: &CreateMessage,
     ) -> Result<Message, DiscordError> {
         let path = followup_webhook_path(application_id, interaction_token, Some("@original"))?;
         self.request_typed(Method::PATCH, &path, Some(body)).await
@@ -632,8 +648,8 @@ impl RestClient {
         &self,
         interaction_token: &str,
         message_id: &str,
-        body: &Value,
-    ) -> Result<Value, DiscordError> {
+        body: &CreateMessage,
+    ) -> Result<Message, DiscordError> {
         let application_id = configured_application_id(self.application_id())?;
         self.edit_followup_message_with_application_id(
             &application_id,
@@ -649,10 +665,10 @@ impl RestClient {
         application_id: &str,
         interaction_token: &str,
         message_id: &str,
-        body: &Value,
-    ) -> Result<Value, DiscordError> {
+        body: &CreateMessage,
+    ) -> Result<Message, DiscordError> {
         let path = followup_webhook_path(application_id, interaction_token, Some(message_id))?;
-        self.request(Method::PATCH, &path, Some(body)).await
+        self.request_typed(Method::PATCH, &path, Some(body)).await
     }
 
     pub async fn delete_followup_message(
@@ -678,22 +694,6 @@ impl RestClient {
         let path = followup_webhook_path(application_id, interaction_token, Some(message_id))?;
         self.request_no_content(Method::DELETE, &path, Option::<&Value>::None)
             .await
-    }
-
-    pub async fn bulk_overwrite_global_commands(
-        &self,
-        commands: Vec<Value>,
-    ) -> Result<Vec<Value>, DiscordError> {
-        let path = global_commands_path(self.application_id())?;
-        let body = Value::Array(commands);
-        let response = self.request(Method::PUT, &path, Some(&body)).await?;
-
-        match response {
-            Value::Array(commands) => Ok(commands),
-            _ => Err(invalid_data_error(
-                "discord api returned unexpected payload for bulk command overwrite",
-            )),
-        }
     }
 
     pub async fn request(
@@ -777,27 +777,16 @@ impl RestClient {
             self.rate_limits
                 .observe(&route_key, &retried.headers, retried.status, &retried.body);
             if retried.status == StatusCode::TOO_MANY_REQUESTS {
-                return Err(invalid_data_error(format!(
-                    "discord api rate limit exceeded after retry for {path}: {}",
-                    parse_body_value(retried.body)
-                )));
+                return Err(discord_rate_limit_error(&route_key, &retried.body));
             }
             if !retried.status.is_success() {
-                return Err(invalid_data_error(format!(
-                    "discord api request failed ({}) {path}: {}",
-                    retried.status,
-                    parse_body_value(retried.body)
-                )));
+                return Err(discord_api_error(retried.status, &retried.body));
             }
             return Ok(retried);
         }
 
         if !response.status.is_success() {
-            return Err(invalid_data_error(format!(
-                "discord api request failed ({}) {path}: {}",
-                response.status,
-                parse_body_value(response.body)
-            )));
+            return Err(discord_api_error(response.status, &response.body));
         }
 
         Ok(response)
@@ -819,9 +808,13 @@ impl RestClient {
         let mut request_builder = self
             .client
             .request(method, url)
-            .header("Authorization", format!("Bot {}", self.token))
             .header("Content-Type", "application/json")
             .header("User-Agent", "DiscordBot (discordrs, 0.4.0)");
+
+        if request_uses_bot_authorization(&normalized_path) {
+            request_builder =
+                request_builder.header("Authorization", format!("Bot {}", self.token));
+        }
 
         if let Some(body) = body {
             request_builder = request_builder.json(body);
@@ -978,9 +971,51 @@ fn configured_application_id(application_id: u64) -> Result<String, DiscordError
     Ok(application_id.to_string())
 }
 
+fn validate_token_path_segment(
+    label: &str,
+    value: &str,
+    allow_original_marker: bool,
+) -> Result<(), DiscordError> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err(invalid_data_error(format!("{label} must not be empty")));
+    }
+
+    if allow_original_marker && trimmed == "@original" {
+        return Ok(());
+    }
+
+    if trimmed.contains('/')
+        || trimmed.contains('\\')
+        || trimmed.contains('?')
+        || trimmed.contains('#')
+    {
+        return Err(invalid_data_error(format!(
+            "{label} must not contain path separators or URL control characters"
+        )));
+    }
+
+    Ok(())
+}
+
 fn global_commands_path(application_id: u64) -> Result<String, DiscordError> {
     let application_id = configured_application_id(application_id)?;
     Ok(format!("/applications/{application_id}/commands"))
+}
+
+fn interaction_callback_path(
+    interaction_id: Snowflake,
+    interaction_token: &str,
+) -> Result<String, DiscordError> {
+    validate_token_path_segment("interaction_token", interaction_token, false)?;
+    Ok(format!(
+        "/interactions/{interaction_id}/{interaction_token}/callback"
+    ))
+}
+
+fn execute_webhook_path(webhook_id: Snowflake, token: &str) -> Result<String, DiscordError> {
+    validate_token_path_segment("webhook_token", token, false)?;
+    Ok(format!("/webhooks/{webhook_id}/{token}?wait=true"))
 }
 
 fn followup_webhook_path(
@@ -994,15 +1029,48 @@ fn followup_webhook_path(
             "application_id must be set before follow-up webhook calls",
         ));
     }
+    validate_token_path_segment("application_id", application_id, false)?;
+    validate_token_path_segment("interaction_token", interaction_token, false)?;
 
     let path = match message_id {
         Some(message_id) => {
+            validate_token_path_segment("message_id", message_id, true)?;
             format!("/webhooks/{application_id}/{interaction_token}/messages/{message_id}")
         }
         None => format!("/webhooks/{application_id}/{interaction_token}"),
     };
 
     Ok(path)
+}
+
+fn request_uses_bot_authorization(path: &str) -> bool {
+    let normalized_path = path
+        .split('?')
+        .next()
+        .unwrap_or(path)
+        .trim_start_matches('/');
+    !(normalized_path.starts_with("webhooks/") || normalized_path.starts_with("interactions/"))
+}
+
+fn discord_api_error(status: StatusCode, body: &str) -> DiscordError {
+    let payload = parse_body_value(body.to_string());
+    let code = payload.get("code").and_then(Value::as_u64);
+    let message = payload
+        .get("message")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .or_else(|| payload.as_str().map(str::to_string))
+        .unwrap_or_else(|| payload.to_string());
+    DiscordError::api(status.as_u16(), code, message)
+}
+
+fn discord_rate_limit_error(route: &str, body: &str) -> DiscordError {
+    let payload = parse_body_value(body.to_string());
+    let retry_after = payload
+        .get("retry_after")
+        .and_then(Value::as_f64)
+        .unwrap_or(1.0);
+    DiscordError::rate_limit(route.to_string(), retry_after)
 }
 
 fn is_major_parameter_segment(segments: &[&str], index: usize) -> bool {
@@ -1084,10 +1152,14 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use super::{
-        configured_application_id, followup_webhook_path, global_commands_path,
-        rate_limit_route_key, RateLimitState,
+        configured_application_id, discord_api_error, discord_rate_limit_error,
+        execute_webhook_path, followup_webhook_path, global_commands_path,
+        interaction_callback_path, rate_limit_route_key, request_uses_bot_authorization,
+        RateLimitState,
     };
-    use reqwest::Method;
+    use crate::error::DiscordError;
+    use crate::model::Snowflake;
+    use reqwest::{Method, StatusCode};
 
     #[test]
     fn configured_application_id_rejects_zero() {
@@ -1131,6 +1203,84 @@ mod tests {
     fn followup_webhook_path_rejects_zero_application_id() {
         let error = followup_webhook_path("0", "token", None).unwrap_err();
         assert!(error.to_string().contains("application_id must be set"));
+    }
+
+    #[test]
+    fn followup_webhook_path_rejects_empty_or_unsafe_segments() {
+        let token_error = followup_webhook_path("123", "", None).unwrap_err();
+        assert!(token_error.to_string().contains("interaction_token"));
+
+        let token_separator_error = followup_webhook_path("123", "token/part", None).unwrap_err();
+        assert!(token_separator_error
+            .to_string()
+            .contains("interaction_token"));
+
+        let application_id_error = followup_webhook_path("12/3", "token", None).unwrap_err();
+        assert!(application_id_error.to_string().contains("application_id"));
+
+        let message_error = followup_webhook_path("123", "token", Some("bad/id")).unwrap_err();
+        assert!(message_error.to_string().contains("message_id"));
+    }
+
+    #[test]
+    fn interaction_callback_path_rejects_unsafe_tokens() {
+        let error = interaction_callback_path(Snowflake::from("123"), "bad/token").unwrap_err();
+        assert!(error.to_string().contains("interaction_token"));
+    }
+
+    #[test]
+    fn execute_webhook_path_rejects_unsafe_tokens() {
+        let error = execute_webhook_path(Snowflake::from("123"), "bad/token").unwrap_err();
+        assert!(error.to_string().contains("webhook_token"));
+    }
+
+    #[test]
+    fn request_uses_bot_authorization_skips_tokenized_callback_paths() {
+        assert!(request_uses_bot_authorization("/channels/123/messages"));
+        assert!(!request_uses_bot_authorization("/webhooks/123/token"));
+        assert!(!request_uses_bot_authorization(
+            "/interactions/123/token/callback"
+        ));
+        assert!(!request_uses_bot_authorization(
+            "/webhooks/123/token/messages/@original"
+        ));
+    }
+
+    #[test]
+    fn discord_api_error_preserves_status_and_code() {
+        let error = discord_api_error(
+            StatusCode::BAD_REQUEST,
+            r#"{"code":50035,"message":"Invalid Form Body"}"#,
+        );
+
+        match error {
+            DiscordError::Api {
+                status,
+                code,
+                message,
+            } => {
+                assert_eq!(status, 400);
+                assert_eq!(code, Some(50035));
+                assert_eq!(message, "Invalid Form Body");
+            }
+            other => panic!("unexpected error variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn discord_rate_limit_error_preserves_route_and_retry_after() {
+        let error = discord_rate_limit_error(
+            "POST:webhooks/123/token",
+            r#"{"message":"You are being rate limited.","retry_after":2.5,"global":false}"#,
+        );
+
+        match error {
+            DiscordError::RateLimit { route, retry_after } => {
+                assert_eq!(route, "POST:webhooks/123/token");
+                assert_eq!(retry_after, 2.5);
+            }
+            other => panic!("unexpected error variant: {other:?}"),
+        }
     }
 
     #[test]

@@ -110,7 +110,7 @@ The **builders** crate offers a fluent, type-safe API for constructing Discord C
 
 ### 1.5 Module Exports (`src/builders/mod.rs`)
 
-Re-exports all builders for ergonomic import:
+Re-exports the supported builder surface for ergonomic import. Use `discordrs::builders::{...}` or the crate-root re-exports; the implementation submodules (`components`, `container`, `media`, `modal`) are internal and not part of the public path contract.
 
 ```rust
 pub use components::{ActionRowBuilder, ButtonBuilder, ComponentsV2Message, SelectMenuBuilder};
@@ -194,10 +194,12 @@ Re-exports parsers and provides JSON helpers:
 - **Purpose:** REST client targeting Discord API v10.
 - **Features:**
   - Automatic retry on `429 Too Many Requests`.
-  - Common endpoints: send/edit/delete messages, manage application commands, followups.
+  - Common endpoints: create/update/delete messages, manage application commands, interaction responses, and followups.
 - **Key Methods:**
   - `new(token, application_id)`
-  - `send_message(channel_id, body)`, `create_interaction_response(...)`
+  - `create_message(channel_id, body)`, `update_message(channel_id, message_id, body)`
+  - `create_interaction_response_typed(interaction_id, interaction_token, body)`
+  - `create_followup_message(interaction_token, body)`
   - `request(method, path, body)`: generic with rate limit logic.
 
 ### 4.2 Interaction Helpers (`src/helpers.rs`)

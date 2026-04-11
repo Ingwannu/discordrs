@@ -224,11 +224,12 @@ fn parse_component_interaction_data(raw: &Value) -> Result<ComponentInteractionD
     })
 }
 
-#[cfg(test)]
+    #[cfg(test)]
 mod tests {
     use serde_json::json;
 
-    use super::{parse_raw_interaction, RawInteraction};
+    use super::{parse_interaction, parse_raw_interaction, RawInteraction};
+    use crate::model::Interaction;
 
     #[test]
     fn parse_raw_interaction_supports_autocomplete() {
@@ -258,6 +259,55 @@ mod tests {
                 assert_eq!(command_type, Some(1));
             }
             other => panic!("unexpected raw interaction: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_interaction_preserves_command_option_values_and_focus() {
+        let interaction = parse_interaction(&json!({
+            "id": "1",
+            "application_id": "2",
+            "token": "token",
+            "type": 4,
+            "data": {
+                "id": "3",
+                "name": "ticket",
+                "type": 1,
+                "options": [{
+                    "type": 3,
+                    "name": "topic",
+                    "value": "billing",
+                    "focused": true
+                }, {
+                    "type": 1,
+                    "name": "nested",
+                    "options": [{
+                        "type": 4,
+                        "name": "priority",
+                        "value": 2
+                    }]
+                }]
+            }
+        }))
+        .unwrap();
+
+        match interaction {
+            Interaction::Autocomplete(interaction) => {
+                assert_eq!(interaction.data.options.len(), 2);
+                assert_eq!(interaction.data.options[0].name, "topic");
+                assert_eq!(
+                    interaction.data.options[0].value,
+                    Some(json!("billing"))
+                );
+                assert!(interaction.data.options[0].is_focused());
+                assert_eq!(interaction.data.options[1].name, "nested");
+                assert_eq!(interaction.data.options[1].options.len(), 1);
+                assert_eq!(
+                    interaction.data.options[1].options[0].value,
+                    Some(json!(2))
+                );
+            }
+            other => panic!("unexpected typed interaction: {other:?}"),
         }
     }
 }

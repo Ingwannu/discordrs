@@ -1049,6 +1049,7 @@ async fn start_gateway_shard(
     #[cfg(feature = "collectors")]
     let collectors_for_events = runtime.collectors.clone();
     let (gateway_command_tx, gateway_command_rx) = mpsc::unbounded_channel();
+    let (event_tx, event_rx) = mpsc::unbounded_channel();
 
     runtime.gateway_commands.write().await.insert(
         shard.0,
@@ -1058,46 +1059,26 @@ async fn start_gateway_shard(
         },
     );
 
-    let callback: EventCallback = Arc::new(move |event_name: String, data: Value| {
-        let handler = Arc::clone(&handler);
-        let ctx = ctx.clone();
-        let http_ref = Arc::clone(&http_for_app_id);
-        let cache = cache_for_events.clone();
+    let event_processor = spawn_gateway_event_processor(
+        Arc::clone(&handler),
+        ctx.clone(),
+        Arc::clone(&http_for_app_id),
+        cache_for_events.clone(),
         #[cfg(feature = "voice")]
-        let voice = Arc::clone(&voice_for_events);
+        Arc::clone(&voice_for_events),
         #[cfg(feature = "collectors")]
-        let collectors = collectors_for_events.clone();
+        collectors_for_events.clone(),
+        event_rx,
+    );
 
-        tokio::spawn(async move {
-            if event_name == "READY" && http_ref.application_id() == 0 {
-                if let Some(app_id) = data
-                    .pointer("/application/id")
-                    .and_then(|value| value.as_str())
-                    .and_then(|value| value.parse::<u64>().ok())
-                {
-                    http_ref.set_application_id(app_id);
-                    info!("Set application_id from READY: {app_id}");
-                }
-            }
-
-            let event = match decode_event(&event_name, data.clone()) {
-                Ok(event) => event,
-                Err(error) => {
-                    warn!("Failed to decode event {event_name}: {error}");
-                    Event::Unknown {
-                        kind: event_name,
-                        raw: data,
-                    }
-                }
-            };
-
-            apply_cache_updates(&cache, &event).await;
-            #[cfg(feature = "voice")]
-            apply_voice_updates(&voice, &event).await;
-            #[cfg(feature = "collectors")]
-            collectors.publish(event.clone());
-            handler.handle_event(ctx, event).await;
-        });
+    let callback_tx = event_tx.clone();
+    let callback: EventCallback = Arc::new(move |event_name: String, data: Value| {
+        if callback_tx
+            .send(GatewayDispatch { event_name, data })
+            .is_err()
+        {
+            warn!("gateway event processor stopped before dispatch could be queued");
+        }
     });
 
     let mut gateway = GatewayClient::new(token, intents)
@@ -1112,9 +1093,94 @@ async fn start_gateway_shard(
         forward_shard_commands(command_rx, gateway_command_tx);
         gateway = gateway.supervisor(shard_supervisor_callback(publisher));
     }
-    let result = gateway.run(callback).await;
+    let result = gateway.run(callback.clone()).await;
+    drop(callback);
+    drop(event_tx);
+    let event_processor_result = event_processor.await;
     gateway_commands_for_runtime.write().await.remove(&shard.0);
+    if let Err(error) = event_processor_result {
+        if result.is_ok() {
+            return Err(invalid_data_error(format!(
+                "gateway event processor task failed: {error}"
+            )));
+        }
+        warn!("gateway event processor task failed after gateway exit: {error}");
+    }
     result
+}
+
+#[derive(Debug)]
+struct GatewayDispatch {
+    event_name: String,
+    data: Value,
+}
+
+fn spawn_gateway_event_processor(
+    handler: Arc<dyn EventHandler>,
+    ctx: Context,
+    http_ref: Arc<DiscordHttpClient>,
+    cache: CacheHandle,
+    #[cfg(feature = "voice")] voice: Arc<RwLock<VoiceManager>>,
+    #[cfg(feature = "collectors")] collectors: CollectorHub,
+    mut event_rx: mpsc::UnboundedReceiver<GatewayDispatch>,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        while let Some(dispatch) = event_rx.recv().await {
+            process_gateway_dispatch(
+                &handler,
+                &ctx,
+                &http_ref,
+                &cache,
+                #[cfg(feature = "voice")]
+                &voice,
+                #[cfg(feature = "collectors")]
+                &collectors,
+                dispatch,
+            )
+            .await;
+        }
+    })
+}
+
+async fn process_gateway_dispatch(
+    handler: &Arc<dyn EventHandler>,
+    ctx: &Context,
+    http_ref: &Arc<DiscordHttpClient>,
+    cache: &CacheHandle,
+    #[cfg(feature = "voice")] voice: &Arc<RwLock<VoiceManager>>,
+    #[cfg(feature = "collectors")] collectors: &CollectorHub,
+    dispatch: GatewayDispatch,
+) {
+    let GatewayDispatch { event_name, data } = dispatch;
+
+    if event_name == "READY" && http_ref.application_id() == 0 {
+        if let Some(app_id) = data
+            .pointer("/application/id")
+            .and_then(|value| value.as_str())
+            .and_then(|value| value.parse::<u64>().ok())
+        {
+            http_ref.set_application_id(app_id);
+            info!("Set application_id from READY: {app_id}");
+        }
+    }
+
+    let event = match decode_event(&event_name, data.clone()) {
+        Ok(event) => event,
+        Err(error) => {
+            warn!("Failed to decode event {event_name}: {error}");
+            Event::Unknown {
+                kind: event_name,
+                raw: data,
+            }
+        }
+    };
+
+    apply_cache_updates(cache, &event).await;
+    #[cfg(feature = "voice")]
+    apply_voice_updates(voice, &event).await;
+    #[cfg(feature = "collectors")]
+    collectors.publish(event.clone());
+    handler.handle_event(ctx.clone(), event).await;
 }
 
 async fn apply_cache_updates(cache: &CacheHandle, event: &Event) {
@@ -1663,6 +1729,88 @@ mod tests {
                 "bulk:2".to_string(),
                 "raw:SOMETHING_NEW".to_string(),
             ]
+        );
+    }
+
+    #[tokio::test]
+    async fn gateway_event_processor_preserves_order_and_sets_application_id() {
+        struct OrderedHandler {
+            hits: Arc<Mutex<Vec<String>>>,
+        }
+
+        #[async_trait]
+        impl super::EventHandler for OrderedHandler {
+            async fn ready(&self, _ctx: super::Context, _ready_data: ReadyPayload) {
+                tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+                self.hits.lock().await.push("ready".to_string());
+            }
+
+            async fn message_create(&self, _ctx: super::Context, message: Message) {
+                self.hits
+                    .lock()
+                    .await
+                    .push(format!("message:{}", message.content));
+            }
+        }
+
+        let hits = Arc::new(Mutex::new(Vec::new()));
+        let handler: Arc<dyn super::EventHandler> = Arc::new(OrderedHandler {
+            hits: Arc::clone(&hits),
+        });
+        let http = Arc::new(DiscordHttpClient::new("token", 0));
+        let context = super::Context::new(
+            Arc::clone(&http),
+            Arc::new(RwLock::new(super::TypeMap::new())),
+        );
+        let cache = crate::cache::CacheHandle::new();
+        let (event_tx, event_rx) = mpsc::unbounded_channel();
+        let processor = super::spawn_gateway_event_processor(
+            handler,
+            context,
+            Arc::clone(&http),
+            cache,
+            #[cfg(feature = "voice")]
+            Arc::new(RwLock::new(crate::voice::VoiceManager::new())),
+            #[cfg(feature = "collectors")]
+            crate::collector::CollectorHub::new(),
+            event_rx,
+        );
+
+        event_tx
+            .send(super::GatewayDispatch {
+                event_name: "READY".to_string(),
+                data: json!({
+                    "user": {
+                        "id": "1",
+                        "username": "bot"
+                    },
+                    "session_id": "session",
+                    "application": {
+                        "id": "42"
+                    },
+                    "resume_gateway_url": "wss://gateway.discord.gg"
+                }),
+            })
+            .unwrap();
+        event_tx
+            .send(super::GatewayDispatch {
+                event_name: "MESSAGE_CREATE".to_string(),
+                data: json!({
+                    "id": "2",
+                    "channel_id": "3",
+                    "content": "hello",
+                    "mentions": [],
+                    "attachments": []
+                }),
+            })
+            .unwrap();
+        drop(event_tx);
+        processor.await.unwrap();
+
+        assert_eq!(http.application_id(), 42);
+        assert_eq!(
+            *hits.lock().await,
+            vec!["ready".to_string(), "message:hello".to_string()]
         );
     }
 

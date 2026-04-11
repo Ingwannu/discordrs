@@ -12,10 +12,8 @@ impl EventHandler for Handler {
     async fn handle_event(&self, ctx: Context, event: Event) {
         match event {
             Event::Ready(ready) => {
-                if let Some(guild_id) = ready.data.application.map(|application| application.id) {
-                    let cached = ctx.cache.guild(&guild_id).await.is_some();
-                    println!("ready_application_cached={cached}");
-                }
+                let cached_guilds = ctx.guilds().list_cached().await.len();
+                println!("ready_user={} cached_guilds={cached_guilds}", ready.data.user.username);
             }
             Event::MessageCreate(message) => {
                 let fetched = ctx

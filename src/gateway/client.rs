@@ -4,7 +4,7 @@ use std::sync::Arc;
 use futures_util::{SinkExt, StreamExt};
 use serde_json::Value;
 use tokio::sync::mpsc;
-use tokio::time::{interval, sleep, timeout, Duration};
+use tokio::time::{sleep, timeout, Duration};
 use tokio_tungstenite::{
     connect_async,
     tungstenite::{
@@ -177,34 +177,13 @@ impl GatewayClient {
         // Send Identify or Resume
         if let Some(ref session_id) = self.session_id {
             let seq = self.sequence.load(Ordering::Relaxed);
-            let resume = serde_json::json!({
-                "op": OP_RESUME,
-                "d": {
-                    "token": format!("Bot {}", self.token),
-                    "session_id": session_id,
-                    "seq": if seq == 0 { Value::Null } else { Value::Number(seq.into()) }
-                }
-            });
+            let resume = resume_payload(&self.token, session_id, seq);
             write
                 .send(WsMessage::Text(resume.to_string().into()))
                 .await?;
             debug!("Sent Resume");
         } else {
-            let mut identify = serde_json::json!({
-                "op": OP_IDENTIFY,
-                "d": {
-                    "token": format!("Bot {}", self.token),
-                    "intents": self.intents,
-                    "properties": {
-                        "os": std::env::consts::OS,
-                        "browser": "discordrs",
-                        "device": "discordrs"
-                    }
-                }
-            });
-            if let Some(shard_info) = self.shard_info {
-                identify["d"]["shard"] = serde_json::json!(shard_info);
-            }
+            let identify = identify_payload(&self.token, self.intents, self.shard_info);
             write
                 .send(WsMessage::Text(identify.to_string().into()))
                 .await?;
@@ -218,15 +197,13 @@ impl GatewayClient {
         ack_received.store(true, Ordering::Relaxed);
 
         let heartbeat_handle = tokio::spawn(async move {
-            let jitter = heartbeat_interval_ms as f64 * rand_jitter();
-            sleep(Duration::from_millis(jitter as u64)).await;
-
-            let mut ticker = interval(Duration::from_millis(heartbeat_interval_ms));
-            ticker.tick().await;
+            sleep(initial_heartbeat_delay(
+                heartbeat_interval_ms,
+                rand_jitter(),
+            ))
+            .await;
 
             loop {
-                ticker.tick().await;
-
                 if !ack_received.load(Ordering::Relaxed) {
                     warn!("Heartbeat ACK not received - zombie connection");
                     let _ = heartbeat_tx.send("zombie".to_string()).await;
@@ -242,6 +219,8 @@ impl GatewayClient {
                 if heartbeat_tx.send(hb.to_string()).await.is_err() {
                     break;
                 }
+
+                sleep(Duration::from_millis(heartbeat_interval_ms)).await;
             }
         });
 
@@ -443,6 +422,41 @@ fn rand_jitter() -> f64 {
     (nanos as f64 % 1000.0) / 1000.0
 }
 
+fn initial_heartbeat_delay(heartbeat_interval_ms: u64, jitter_factor: f64) -> Duration {
+    let clamped = jitter_factor.clamp(0.0, 1.0);
+    Duration::from_millis((heartbeat_interval_ms as f64 * clamped) as u64)
+}
+
+fn resume_payload(token: &str, session_id: &str, seq: u64) -> Value {
+    serde_json::json!({
+        "op": OP_RESUME,
+        "d": {
+            "token": token,
+            "session_id": session_id,
+            "seq": if seq == 0 { Value::Null } else { Value::Number(seq.into()) }
+        }
+    })
+}
+
+fn identify_payload(token: &str, intents: u64, shard_info: Option<[u32; 2]>) -> Value {
+    let mut identify = serde_json::json!({
+        "op": OP_IDENTIFY,
+        "d": {
+            "token": token,
+            "intents": intents,
+            "properties": {
+                "os": std::env::consts::OS,
+                "browser": "discordrs",
+                "device": "discordrs"
+            }
+        }
+    });
+    if let Some(shard_info) = shard_info {
+        identify["d"]["shard"] = serde_json::json!(shard_info);
+    }
+    identify
+}
+
 fn is_terminal_close_frame(frame: Option<&CloseFrame>) -> bool {
     frame
         .map(|frame| is_terminal_close_code(u16::from(frame.code)))
@@ -517,7 +531,12 @@ impl GatewayClient {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_terminal_close_code, voice_state_update_payload};
+    use std::time::Duration;
+
+    use super::{
+        identify_payload, initial_heartbeat_delay, is_terminal_close_code, resume_payload,
+        voice_state_update_payload,
+    };
     use crate::model::Snowflake;
     use crate::ws::GatewayConnectionConfig;
 
@@ -563,5 +582,30 @@ mod tests {
         assert_eq!(payload["d"]["channel_id"], serde_json::json!("2"));
         assert_eq!(payload["d"]["self_mute"], serde_json::json!(false));
         assert_eq!(payload["d"]["self_deaf"], serde_json::json!(true));
+    }
+
+    #[test]
+    fn initial_heartbeat_delay_uses_only_jitter_fraction() {
+        assert_eq!(
+            initial_heartbeat_delay(1_000, 0.0),
+            Duration::from_millis(0)
+        );
+        assert_eq!(
+            initial_heartbeat_delay(1_000, 0.25),
+            Duration::from_millis(250)
+        );
+        assert_eq!(
+            initial_heartbeat_delay(1_000, 1.5),
+            Duration::from_millis(1_000)
+        );
+    }
+
+    #[test]
+    fn identify_and_resume_payloads_use_raw_gateway_token() {
+        let identify = identify_payload("secret-token", 513, Some([2, 4]));
+        let resume = resume_payload("secret-token", "session", 42);
+
+        assert_eq!(identify["d"]["token"], serde_json::json!("secret-token"));
+        assert_eq!(resume["d"]["token"], serde_json::json!("secret-token"));
     }
 }

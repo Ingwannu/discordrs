@@ -9,6 +9,7 @@ use axum::{
 };
 use ed25519_dalek::{Signature, VerifyingKey};
 use serde_json::Value;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::builders::ModalBuilder;
 use crate::error::DiscordError;
@@ -55,6 +56,8 @@ struct InteractionsState<H> {
     handler: H,
 }
 
+const SIGNATURE_TIMESTAMP_TOLERANCE_SECS: i64 = 60 * 5;
+
 fn decode_verifying_key(public_key: &str) -> Result<VerifyingKey, DiscordError> {
     let public_key_bytes = hex::decode(public_key)?;
     let public_key_bytes: [u8; 32] = public_key_bytes
@@ -66,12 +69,57 @@ fn decode_verifying_key(public_key: &str) -> Result<VerifyingKey, DiscordError> 
         .map_err(|error| invalid_data_error(format!("invalid public key: {error}")))
 }
 
+fn current_unix_timestamp() -> Result<i64, DiscordError> {
+    let duration = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|_| invalid_data_error("system clock is before unix epoch"))?;
+
+    i64::try_from(duration.as_secs())
+        .map_err(|_| invalid_data_error("system clock is out of range"))
+}
+
+fn validate_signature_timestamp(
+    timestamp: &str,
+    now_unix_timestamp: i64,
+) -> Result<(), DiscordError> {
+    let timestamp = timestamp
+        .parse::<i64>()
+        .map_err(|_| invalid_data_error("signature timestamp must be a unix timestamp"))?;
+    let drift = (i128::from(timestamp) - i128::from(now_unix_timestamp)).abs();
+
+    if drift > i128::from(SIGNATURE_TIMESTAMP_TOLERANCE_SECS) {
+        return Err(invalid_data_error(
+            "signature timestamp outside allowed freshness window",
+        ));
+    }
+
+    Ok(())
+}
+
 fn verify_signature_with_key(
     verifying_key: &VerifyingKey,
     signature_hex: &str,
     timestamp: &str,
     body: &[u8],
 ) -> Result<(), DiscordError> {
+    let now_unix_timestamp = current_unix_timestamp()?;
+    verify_signature_with_key_at_time(
+        verifying_key,
+        signature_hex,
+        timestamp,
+        body,
+        now_unix_timestamp,
+    )
+}
+
+fn verify_signature_with_key_at_time(
+    verifying_key: &VerifyingKey,
+    signature_hex: &str,
+    timestamp: &str,
+    body: &[u8],
+    now_unix_timestamp: i64,
+) -> Result<(), DiscordError> {
+    validate_signature_timestamp(timestamp, now_unix_timestamp)?;
     let signature_bytes = hex::decode(signature_hex)?;
     let signature = Signature::from_slice(&signature_bytes)
         .map_err(|error| invalid_data_error(format!("invalid signature bytes: {error}")))?;
@@ -97,10 +145,26 @@ fn verify_discord_request_signature(
     headers: &HeaderMap,
     body: &[u8],
 ) -> Result<(), StatusCode> {
+    let now_unix_timestamp = current_unix_timestamp().map_err(|_| StatusCode::UNAUTHORIZED)?;
+    verify_discord_request_signature_at_time(verifying_key, headers, body, now_unix_timestamp)
+}
+
+fn verify_discord_request_signature_at_time(
+    verifying_key: &VerifyingKey,
+    headers: &HeaderMap,
+    body: &[u8],
+    now_unix_timestamp: i64,
+) -> Result<(), StatusCode> {
     let signature = header_value(headers, "x-signature-ed25519")?;
     let timestamp = header_value(headers, "x-signature-timestamp")?;
-    verify_signature_with_key(verifying_key, signature, timestamp, body)
-        .map_err(|_| StatusCode::UNAUTHORIZED)
+    verify_signature_with_key_at_time(
+        verifying_key,
+        signature,
+        timestamp,
+        body,
+        now_unix_timestamp,
+    )
+    .map_err(|_| StatusCode::UNAUTHORIZED)
 }
 
 pub fn verify_discord_signature(
@@ -316,15 +380,21 @@ where
 #[cfg(test)]
 mod tests {
     use async_trait::async_trait;
+    use axum::http::{HeaderMap, HeaderValue, StatusCode};
+    use ed25519_dalek::{Signer, SigningKey, VerifyingKey};
     use serde_json::Value;
 
     use super::{
         interaction_response_payload, try_interactions_endpoint, try_typed_interactions_endpoint,
+        verify_discord_request_signature_at_time, verify_signature_with_key_at_time,
         InteractionHandler, InteractionResponse, TypedInteractionHandler,
+        SIGNATURE_TIMESTAMP_TOLERANCE_SECS,
     };
     use crate::model::ApplicationCommandOptionChoice;
     use crate::model::{Interaction, InteractionContextData};
     use crate::parsers::{InteractionContext, RawInteraction};
+
+    const TEST_NOW_UNIX_TIMESTAMP: i64 = 1_700_000_000;
 
     #[derive(Clone)]
     struct TestHandler;
@@ -395,5 +465,183 @@ mod tests {
     fn interaction_response_payload_supports_launch_activity() {
         let payload = interaction_response_payload(InteractionResponse::LaunchActivity);
         assert_eq!(payload["type"], 12);
+    }
+
+    fn test_signing_key() -> SigningKey {
+        SigningKey::from_bytes(&[7_u8; 32])
+    }
+
+    fn sign_request(timestamp: &str, body: &[u8]) -> (VerifyingKey, String) {
+        let signing_key = test_signing_key();
+        let verifying_key = signing_key.verifying_key();
+        let mut signed_payload = Vec::with_capacity(timestamp.len() + body.len());
+        signed_payload.extend_from_slice(timestamp.as_bytes());
+        signed_payload.extend_from_slice(body);
+        let signature = signing_key.sign(&signed_payload);
+
+        (verifying_key, hex::encode(signature.to_bytes()))
+    }
+
+    fn signed_headers(signature: &str, timestamp: &str) -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-signature-ed25519",
+            HeaderValue::from_str(signature).expect("signature header"),
+        );
+        headers.insert(
+            "x-signature-timestamp",
+            HeaderValue::from_str(timestamp).expect("timestamp header"),
+        );
+        headers
+    }
+
+    #[test]
+    fn verify_signature_with_key_at_time_accepts_fresh_timestamp() {
+        let body = br#"{"type":1}"#;
+        let timestamp = TEST_NOW_UNIX_TIMESTAMP.to_string();
+        let (verifying_key, signature) = sign_request(&timestamp, body);
+
+        assert!(verify_signature_with_key_at_time(
+            &verifying_key,
+            &signature,
+            &timestamp,
+            body,
+            TEST_NOW_UNIX_TIMESTAMP,
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn verify_signature_with_key_at_time_rejects_stale_timestamp() {
+        let body = br#"{"type":1}"#;
+        let timestamp =
+            (TEST_NOW_UNIX_TIMESTAMP - SIGNATURE_TIMESTAMP_TOLERANCE_SECS - 1).to_string();
+        let (verifying_key, signature) = sign_request(&timestamp, body);
+
+        let error = verify_signature_with_key_at_time(
+            &verifying_key,
+            &signature,
+            &timestamp,
+            body,
+            TEST_NOW_UNIX_TIMESTAMP,
+        )
+        .expect_err("stale timestamps should be rejected");
+
+        assert!(error.to_string().contains("freshness window"));
+    }
+
+    #[test]
+    fn verify_signature_with_key_at_time_rejects_future_timestamp() {
+        let body = br#"{"type":1}"#;
+        let timestamp =
+            (TEST_NOW_UNIX_TIMESTAMP + SIGNATURE_TIMESTAMP_TOLERANCE_SECS + 1).to_string();
+        let (verifying_key, signature) = sign_request(&timestamp, body);
+
+        let error = verify_signature_with_key_at_time(
+            &verifying_key,
+            &signature,
+            &timestamp,
+            body,
+            TEST_NOW_UNIX_TIMESTAMP,
+        )
+        .expect_err("future timestamps should be rejected");
+
+        assert!(error.to_string().contains("freshness window"));
+    }
+
+    #[test]
+    fn verify_signature_with_key_at_time_rejects_invalid_timestamp() {
+        let body = br#"{"type":1}"#;
+        let timestamp = "not-a-timestamp";
+        let (verifying_key, signature) = sign_request(timestamp, body);
+
+        let error = verify_signature_with_key_at_time(
+            &verifying_key,
+            &signature,
+            timestamp,
+            body,
+            TEST_NOW_UNIX_TIMESTAMP,
+        )
+        .expect_err("invalid timestamps should be rejected");
+
+        assert!(error.to_string().contains("unix timestamp"));
+    }
+
+    #[test]
+    fn verify_discord_request_signature_rejects_missing_headers() {
+        let headers = HeaderMap::new();
+        let body = br#"{"type":1}"#;
+        let signing_key = test_signing_key();
+        let verifying_key = signing_key.verifying_key();
+
+        assert_eq!(
+            verify_discord_request_signature_at_time(
+                &verifying_key,
+                &headers,
+                body,
+                TEST_NOW_UNIX_TIMESTAMP,
+            ),
+            Err(StatusCode::UNAUTHORIZED)
+        );
+    }
+
+    #[test]
+    fn verify_discord_request_signature_rejects_invalid_signature() {
+        let body = br#"{"type":1}"#;
+        let timestamp = TEST_NOW_UNIX_TIMESTAMP.to_string();
+        let signing_key = test_signing_key();
+        let verifying_key = signing_key.verifying_key();
+        let headers = signed_headers(
+            "0000000000000000000000000000000000000000000000000000000000000000",
+            &timestamp,
+        );
+
+        assert_eq!(
+            verify_discord_request_signature_at_time(
+                &verifying_key,
+                &headers,
+                body,
+                TEST_NOW_UNIX_TIMESTAMP,
+            ),
+            Err(StatusCode::UNAUTHORIZED)
+        );
+    }
+
+    #[test]
+    fn verify_discord_request_signature_rejects_stale_timestamp() {
+        let body = br#"{"type":1}"#;
+        let timestamp =
+            (TEST_NOW_UNIX_TIMESTAMP - SIGNATURE_TIMESTAMP_TOLERANCE_SECS - 1).to_string();
+        let (verifying_key, signature) = sign_request(&timestamp, body);
+        let headers = signed_headers(&signature, &timestamp);
+
+        assert_eq!(
+            verify_discord_request_signature_at_time(
+                &verifying_key,
+                &headers,
+                body,
+                TEST_NOW_UNIX_TIMESTAMP,
+            ),
+            Err(StatusCode::UNAUTHORIZED)
+        );
+    }
+
+    #[test]
+    fn verify_discord_request_signature_rejects_future_timestamp() {
+        let body = br#"{"type":1}"#;
+        let timestamp =
+            (TEST_NOW_UNIX_TIMESTAMP + SIGNATURE_TIMESTAMP_TOLERANCE_SECS + 1).to_string();
+        let (verifying_key, signature) = sign_request(&timestamp, body);
+        let headers = signed_headers(&signature, &timestamp);
+
+        assert_eq!(
+            verify_discord_request_signature_at_time(
+                &verifying_key,
+                &headers,
+                body,
+                TEST_NOW_UNIX_TIMESTAMP,
+            ),
+            Err(StatusCode::UNAUTHORIZED)
+        );
     }
 }

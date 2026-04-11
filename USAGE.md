@@ -39,6 +39,26 @@ If you want the common runtime helpers in one import, prefer:
 use discordrs::prelude::*;
 ```
 
+## 1.5 Migration Notes
+
+The public API was tightened to make the typed surface the default:
+
+- `RestClient` no longer exposes the old raw convenience methods such as `send_message`, `edit_message`, `create_dm_channel`, `create_interaction_response`, and `bulk_overwrite_global_commands`.
+- Builder implementation submodules are private. Import from `discordrs::builders::{...}` or use the crate root re-exports.
+- `ApplicationCommand` no longer implements `DiscordModel`; use `id_opt()` and `created_at()` directly on the command value.
+
+Common replacements:
+
+| Old path | New path |
+|----------|----------|
+| `RestClient::send_message(...)` | `send_message(...)` helper or `RestClient::create_message(...)` |
+| `RestClient::edit_message(...)` | `RestClient::update_message(...)` |
+| `RestClient::create_dm_channel(...)` | `RestClient::create_dm_channel_typed(...)` |
+| `RestClient::create_interaction_response(...)` | `RestClient::create_interaction_response_typed(...)` or typed helper functions |
+| `RestClient::bulk_overwrite_global_commands(...)` | `RestClient::bulk_overwrite_global_commands_typed(...)` |
+| `discordrs::builders::modal::*` | `discordrs::builders::{...}` or crate root re-exports |
+| generic `DiscordModel` access for `ApplicationCommand` | `ApplicationCommand::id_opt()` / `ApplicationCommand::created_at()` |
+
 ## 2. Start a Typed Gateway Bot
 
 `Client` is the primary runtime entry point. `BotClient` remains as a compatibility alias.
@@ -208,10 +228,11 @@ impl EventHandler for Handler {
     async fn handle_event(&self, ctx: Context, event: Event) {
         if let Event::InteractionCreate(interaction) = event {
             let interaction = interaction.interaction;
-            let response = MessageBuilder::new().content("Working...").ephemeral(true).build();
+            let interaction_ctx = interaction.context().clone();
+            let response = MessageBuilder::new().content("Working...").build();
 
-            let _ = defer_interaction(&ctx.http, &interaction).await;
-            let _ = followup_message(&ctx.http, &interaction, response).await;
+            let _ = defer_interaction(&ctx.http, &interaction_ctx, true).await;
+            let _ = followup_message(&ctx.http, &interaction_ctx, response, true).await;
         }
     }
 }
@@ -232,7 +253,8 @@ If you run an outgoing-interactions HTTP server instead of the gateway runtime, 
 use async_trait::async_trait;
 use axum::Router;
 use discordrs::{
-    Interaction, InteractionResponse, TypedInteractionHandler, try_typed_interactions_endpoint,
+    Interaction, InteractionContextData, InteractionResponse, TypedInteractionHandler,
+    try_typed_interactions_endpoint,
 };
 
 #[derive(Clone)]
@@ -240,9 +262,15 @@ struct Handler;
 
 #[async_trait]
 impl TypedInteractionHandler for Handler {
-    async fn handle(&self, interaction: Interaction) -> InteractionResponse {
+    async fn handle_typed(
+        &self,
+        _ctx: InteractionContextData,
+        interaction: Interaction,
+    ) -> InteractionResponse {
         match interaction {
-            Interaction::ChatInput(command) if command.data.name == "hello" => {
+            Interaction::ChatInputCommand(command)
+                if command.data.name.as_deref() == Some("hello") =>
+            {
                 InteractionResponse::ChannelMessage(serde_json::json!({
                     "content": "Hello from typed endpoint"
                 }))
@@ -259,6 +287,8 @@ fn build_router(public_key: &str) -> Router {
 ```
 
 Use `try_interactions_endpoint(...)` instead when you intentionally want the raw interaction surface.
+
+Typed slash/autocomplete input now keeps real user-entered option data. `interaction.data.options` uses `CommandInteractionOption`, which preserves nested options plus `value` and `focused` for autocomplete flows.
 
 ## 8. Use Cache-Aware Managers
 
@@ -479,7 +509,11 @@ async fn handle_modal(http: &DiscordHttpClient, payload: &Value) -> Result<(), d
 - `Client` is the main gateway runtime surface. `BotClient` is kept as an alias for compatibility.
 - `EventHandler::handle_event(...)` is the typed gateway entry point. Legacy callbacks such as `ready`, `message_create`, and `interaction_create` are still available for compatibility and now receive typed payloads.
 - `RestClient` is the preferred REST-facing name. `DiscordHttpClient` remains available.
+- Prefer the typed `RestClient` methods for new code.
+- Token-authenticated `/interactions/...` and `/webhooks/...` requests intentionally omit bot `Authorization` headers, and webhook/callback path segments are validated before requests are built.
 - `Context::new(...)` exists for tests and helper code that need a standalone context outside the live gateway runtime.
+- Prefer builder imports from `discordrs::builders::{...}` or the crate root re-exports. Deeper implementation submodules are private.
+- Use `ApplicationCommand::id_opt()` until Discord has assigned an ID. Unsaved commands are no longer treated as generic `DiscordModel`s.
 - `spawn_shards(...)` is the right choice when you want status inspection, manual shutdown, or supervisor-driven shard control.
 - `start_shards(...)` is the right choice when you only want the runtime to own the shard lifecycle and block until it exits.
 - `voice` currently provides runtime handshake and state plumbing, not a full production media transport stack.

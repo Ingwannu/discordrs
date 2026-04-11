@@ -51,6 +51,26 @@ discordrs = { version = "0.4.0", features = ["voice"] }
 discordrs = { version = "0.4.0", features = ["gateway", "interactions"] }
 ```
 
+## API Cleanup
+
+Recent API cleanup tightened the public surface:
+
+- `RestClient` now exposes the typed REST methods as the supported public path. The old raw convenience methods such as `send_message`, `edit_message`, `create_dm_channel`, `create_interaction_response`, and `bulk_overwrite_global_commands` are no longer public.
+- Builder implementation submodules are private. Import builders from `discordrs::builders::{...}` or use the crate root re-exports.
+- `ApplicationCommand` no longer implements `DiscordModel` because its ID is optional until Discord assigns one. Use `ApplicationCommand::id_opt()` and `ApplicationCommand::created_at()` instead.
+
+If you are upgrading existing code, the common replacements are:
+
+| Old path | New path |
+|----------|----------|
+| `RestClient::send_message(...)` | `send_message(...)` helper or `RestClient::create_message(...)` |
+| `RestClient::edit_message(...)` | `RestClient::update_message(...)` |
+| `RestClient::create_dm_channel(...)` | `RestClient::create_dm_channel_typed(...)` |
+| `RestClient::create_interaction_response(...)` | `RestClient::create_interaction_response_typed(...)` or typed helper functions |
+| `RestClient::bulk_overwrite_global_commands(...)` | `RestClient::bulk_overwrite_global_commands_typed(...)` |
+| `discordrs::builders::modal::*` | `discordrs::builders::{...}` or crate root re-exports |
+| generic `DiscordModel` access for `ApplicationCommand` | `ApplicationCommand::id_opt()` / `ApplicationCommand::created_at()` |
+
 ## Documentation Site
 
 A navigation-focused docs website (similar to the discord.js docs browsing style) is available in [`discordrsdocs/`](discordrsdocs/):
@@ -235,9 +255,14 @@ fn app(public_key: &str) -> Router {
 - Use `try_interactions_endpoint()` when you want invalid public keys to fail at startup instead of during requests.
 - Use `discordrs::prelude::*` when you want the shortest path to the main runtime, command, helper, and response APIs.
 - Use `DiscordHttpClient::create_followup_message_with_application_id()` when you already have `InteractionContext.application_id` and the client was not initialized with an application id.
+- Prefer the typed `RestClient` methods such as `create_message`, `update_message`, `create_interaction_response_typed`, and `bulk_overwrite_*_typed`.
+- Token-authenticated `/interactions/...` and `/webhooks/...` requests intentionally omit bot `Authorization` headers, and token/path segments are validated before webhook/callback paths are built.
+- Typed slash and autocomplete interaction payloads preserve option `value`, `focused`, and nested option input through `CommandInteractionOption`.
 - Use `Client` for new gateway code. `BotClient` remains available as a compatibility alias.
 - Use `EventHandler::handle_event(...)` when you want one typed entry point for every gateway event. Legacy convenience callbacks such as `ready`, `message_create`, and `interaction_create` still exist, but they now receive typed payloads too.
 - Use `Context::new(...)` when tests or helper crates need a standalone context outside the live gateway runtime.
+- Prefer builder imports from `discordrs::builders::{...}` or the crate root re-exports. Deeper implementation submodules are private.
+- Use `ApplicationCommand::id_opt()` until Discord has assigned an ID. Unsaved commands are no longer treated as generic `DiscordModel`s.
 - The parser keeps V2 modal component types, including `FileUpload`, `RadioGroup`, and `CheckboxGroup`, so routing logic can keep full fidelity.
 
 ## License

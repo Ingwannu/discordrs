@@ -72,6 +72,13 @@ impl DiscordError {
         }
     }
 
+    pub fn rate_limit(route: impl Into<String>, retry_after: f64) -> Self {
+        Self::RateLimit {
+            route: route.into(),
+            retry_after,
+        }
+    }
+
     pub fn gateway(message: impl Into<String>) -> Self {
         Self::Gateway {
             message: message.into(),

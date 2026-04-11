@@ -34,7 +34,6 @@ pub struct GatewayConnectionConfig {
     base_url: String,
     version: u8,
     encoding: GatewayEncoding,
-    compression: Option<GatewayCompression>,
     shard: Option<(u32, u32)>,
 }
 
@@ -50,7 +49,6 @@ impl GatewayConnectionConfig {
             base_url: base_url.into(),
             version: DEFAULT_GATEWAY_VERSION,
             encoding: GatewayEncoding::Json,
-            compression: None,
             shard: None,
         }
     }
@@ -70,8 +68,9 @@ impl GatewayConnectionConfig {
         self
     }
 
-    pub fn compression(mut self, compression: GatewayCompression) -> Self {
-        self.compression = Some(compression);
+    /// Gateway zlib-stream compression is not supported by the runtime and is ignored.
+    pub fn compression(self, compression: GatewayCompression) -> Self {
+        let _ = compression;
         self
     }
 
@@ -87,6 +86,8 @@ impl GatewayConnectionConfig {
             format!("wss://{}", self.base_url.trim_start_matches('/'))
         };
 
+        remove_query_param(&mut normalized, "compress");
+
         if !has_query_param(&normalized, "v") {
             append_query_param(&mut normalized, &format!("v={}", self.version));
         }
@@ -96,15 +97,6 @@ impl GatewayConnectionConfig {
                 &mut normalized,
                 &format!("encoding={}", self.encoding.as_str()),
             );
-        }
-
-        if let Some(compression) = self.compression {
-            if !has_query_param(&normalized, "compress") {
-                append_query_param(
-                    &mut normalized,
-                    &format!("compress={}", compression.as_str()),
-                );
-            }
         }
 
         if let Some((shard_id, total_shards)) = self.shard {
@@ -143,6 +135,26 @@ fn append_query_param(url: &mut String, param: &str) {
     url.push_str(param);
 }
 
+fn remove_query_param(url: &mut String, key: &str) {
+    let original = std::mem::take(url);
+    let Some((base, query)) = original.split_once('?') else {
+        *url = original;
+        return;
+    };
+
+    let filtered_segments: Vec<&str> = query
+        .split('&')
+        .filter(|segment| !segment.is_empty())
+        .filter(|segment| segment.split('=').next() != Some(key))
+        .collect();
+
+    *url = base.to_string();
+    if !filtered_segments.is_empty() {
+        url.push('?');
+        url.push_str(&filtered_segments.join("&"));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{GatewayCompression, GatewayConnectionConfig};
@@ -156,15 +168,17 @@ mod tests {
     }
 
     #[test]
-    fn normalized_url_keeps_existing_query_values_and_adds_shard() {
-        let url = GatewayConnectionConfig::new("wss://gateway.discord.gg/?encoding=json")
-            .compression(GatewayCompression::ZlibStream)
-            .shard(2, 8)
-            .normalized_url();
+    fn normalized_url_strips_unsupported_compression_and_adds_shard() {
+        let url = GatewayConnectionConfig::new(
+            "wss://gateway.discord.gg/?encoding=json&compress=zlib-stream",
+        )
+        .compression(GatewayCompression::ZlibStream)
+        .shard(2, 8)
+        .normalized_url();
 
         assert_eq!(
             url,
-            "wss://gateway.discord.gg/?encoding=json&v=10&compress=zlib-stream&shard=2,8"
+            "wss://gateway.discord.gg/?encoding=json&v=10&shard=2,8"
         );
     }
 }

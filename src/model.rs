@@ -502,6 +502,18 @@ pub struct ApplicationCommand {
     pub nsfw: Option<bool>,
 }
 
+impl ApplicationCommand {
+    /// Returns the command ID when Discord has assigned one.
+    pub fn id_opt(&self) -> Option<&Snowflake> {
+        self.id.as_ref()
+    }
+
+    /// Returns the creation timestamp once Discord has assigned an ID.
+    pub fn created_at(&self) -> Option<u64> {
+        self.id_opt().and_then(Snowflake::timestamp)
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 pub struct InteractionContextData {
     pub id: Snowflake,
@@ -524,6 +536,25 @@ pub struct InteractionContextData {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
+pub struct CommandInteractionOption {
+    #[serde(rename = "type")]
+    pub kind: u8,
+    pub name: String,
+    #[serde(default)]
+    pub options: Vec<CommandInteractionOption>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub value: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub focused: Option<bool>,
+}
+
+impl CommandInteractionOption {
+    pub fn is_focused(&self) -> bool {
+        self.focused.unwrap_or(false)
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
 pub struct CommandInteractionData {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub id: Option<Snowflake>,
@@ -532,7 +563,7 @@ pub struct CommandInteractionData {
     #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
     pub kind: Option<u8>,
     #[serde(default)]
-    pub options: Vec<ApplicationCommandOption>,
+    pub options: Vec<CommandInteractionOption>,
     #[serde(default)]
     pub resolved: Option<serde_json::Value>,
 }
@@ -784,9 +815,18 @@ pub trait DiscordModel: Send + Sync + 'static {
     /// Returns the Snowflake ID of this model.
     fn id(&self) -> &Snowflake;
 
+    /// Returns the Snowflake ID when the model has one.
+    ///
+    /// Most Discord models always carry an ID, so the default implementation
+    /// simply delegates to [`DiscordModel::id`]. Models that can exist before
+    /// Discord assigns an ID, such as `ApplicationCommand`, override this.
+    fn id_opt(&self) -> Option<&Snowflake> {
+        Some(self.id())
+    }
+
     /// Returns the creation timestamp as Unix milliseconds, extracted from the Snowflake ID.
     fn created_at(&self) -> Option<u64> {
-        self.id().timestamp()
+        self.id_opt().and_then(Snowflake::timestamp)
     }
 }
 
@@ -826,19 +866,13 @@ impl DiscordModel for Attachment {
     }
 }
 
-impl DiscordModel for ApplicationCommand {
-    fn id(&self) -> &Snowflake {
-        // ApplicationCommand.id is Option<Snowflake>, so we need a fallback
-        static EMPTY: Snowflake = Snowflake(String::new());
-        self.id.as_ref().unwrap_or(&EMPTY)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use serde_json::json;
 
-    use super::{ApplicationCommandOptionChoice, PermissionsBitField, Snowflake, User};
+    use super::{
+        ApplicationCommand, ApplicationCommandOptionChoice, PermissionsBitField, Snowflake, User,
+    };
 
     #[test]
     fn snowflake_deserializes_from_string_and_number() {
@@ -889,5 +923,33 @@ mod tests {
         let ts = sf.timestamp().expect("should extract timestamp");
         // Should be a reasonable Unix timestamp (after 2020)
         assert!(ts > 1_577_836_800_000u64); // after 2020-01-01
+    }
+
+    #[test]
+    fn application_command_id_opt_is_none_until_discord_assigns_an_id() {
+        let command = ApplicationCommand {
+            name: "ping".to_string(),
+            description: "Ping".to_string(),
+            ..ApplicationCommand::default()
+        };
+
+        assert!(command.id_opt().is_none());
+        assert_eq!(command.created_at(), None);
+    }
+
+    #[test]
+    fn application_command_created_at_uses_assigned_id() {
+        let command = ApplicationCommand {
+            id: Some(Snowflake::from(1759288472266248192u64)),
+            name: "ping".to_string(),
+            description: "Ping".to_string(),
+            ..ApplicationCommand::default()
+        };
+
+        assert_eq!(
+            command.id_opt().map(Snowflake::as_str),
+            Some("1759288472266248192")
+        );
+        assert!(command.created_at().is_some());
     }
 }

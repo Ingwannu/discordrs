@@ -55,8 +55,9 @@ pub use event::{
 pub use manager::CachedManager;
 pub use model::{
     ApplicationCommand, ApplicationCommandOption, ApplicationCommandOptionChoice, Attachment,
-    AutocompleteInteraction, Channel, ChatInputCommandInteraction, ComponentInteraction,
-    CreateDmChannel, CreateMessage, DiscordModel, GatewayBot, Guild, Interaction,
+    AutocompleteInteraction, Channel, ChatInputCommandInteraction, CommandInteractionData,
+    CommandInteractionOption, ComponentInteraction, CreateDmChannel, CreateMessage, DiscordModel,
+    GatewayBot, Guild, Interaction,
     InteractionCallbackResponse, InteractionContextData, Member, Message,
     MessageContextMenuInteraction, ModalSubmitInteraction, PermissionsBitField, Role,
     SessionStartLimit, Snowflake, User, UserContextMenuInteraction, VoiceServerUpdate, VoiceState,

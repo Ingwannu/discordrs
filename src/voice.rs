@@ -215,23 +215,53 @@ impl VoiceConnectionState {
         self.status = VoiceConnectionStatus::Disconnected;
     }
 
+    fn clear_runtime_state(&mut self) {
+        self.endpoint = None;
+        self.session_id = None;
+        self.token = None;
+        self.transport = None;
+        self.speaking = None;
+    }
+
+    fn transition_to_disconnected(&mut self) {
+        self.clear_runtime_state();
+        self.mark_disconnected();
+    }
+
     pub fn apply_server_update(&mut self, update: &VoiceServerUpdate) {
+        self.transport = None;
+        self.speaking = None;
         self.endpoint = update.endpoint.clone();
         self.token = Some(update.token.clone());
+        if self.endpoint.is_none() {
+            self.session_id = None;
+            self.token = None;
+            self.mark_disconnected();
+            return;
+        }
         if self.is_ready() {
             self.mark_connected();
+        } else {
+            self.status = VoiceConnectionStatus::Connecting;
         }
     }
 
     pub fn apply_voice_state(&mut self, state: &VoiceState) {
         if let Some(channel_id) = state.channel_id.clone() {
             self.channel_id = channel_id;
+        } else {
+            self.self_mute = state.self_mute;
+            self.self_deaf = state.self_deaf;
+            self.transition_to_disconnected();
+            return;
         }
         self.session_id = state.session_id.clone();
         self.self_mute = state.self_mute;
         self.self_deaf = state.self_deaf;
         if self.is_ready() {
             self.mark_connected();
+        } else {
+            self.status = VoiceConnectionStatus::Connecting;
         }
     }
 
@@ -636,11 +666,17 @@ impl VoiceManager {
     ) -> Option<VoiceConnectionState> {
         let update = update.into();
         let state = self.connections.get_mut(&update.guild_id)?;
+        let was_disconnected = state.status == VoiceConnectionStatus::Disconnected;
         state.apply_server_update(&update);
         let guild_id = state.guild_id.clone();
         self.events.push(VoiceEvent::ServerUpdated {
             guild_id: guild_id.clone(),
         });
+        if !was_disconnected && state.status == VoiceConnectionStatus::Disconnected {
+            self.events.push(VoiceEvent::Disconnected {
+                guild_id: guild_id.clone(),
+            });
+        }
         if state.status == VoiceConnectionStatus::Connected {
             self.events.push(VoiceEvent::Connected(state.clone()));
         }
@@ -665,10 +701,16 @@ impl VoiceManager {
             }
         };
 
+        let was_disconnected = state.status == VoiceConnectionStatus::Disconnected;
         state.apply_voice_state(update);
         self.events.push(VoiceEvent::SessionUpdated {
             guild_id: guild_id.clone(),
         });
+        if !was_disconnected && state.status == VoiceConnectionStatus::Disconnected {
+            self.events.push(VoiceEvent::Disconnected {
+                guild_id: guild_id.clone(),
+            });
+        }
         if state.status == VoiceConnectionStatus::Connected {
             self.events.push(VoiceEvent::Connected(state.clone()));
         }
@@ -918,5 +960,117 @@ mod tests {
             .unwrap();
         let current = manager.start_next("1").unwrap();
         assert_eq!(current.id, "track-1");
+    }
+
+    #[test]
+    fn voice_state_disconnect_clears_runtime_state_and_marks_disconnected() {
+        let mut manager = VoiceManager::new();
+        let guild_id = Snowflake::from("1");
+
+        manager.connect(
+            VoiceConnectionConfig::new(guild_id.clone(), "2")
+                .session_id("session")
+                .token("token")
+                .endpoint("voice.discord.media"),
+        );
+        manager.configure_transport(
+            guild_id.clone(),
+            VoiceTransportState::udp(
+                "127.0.0.1",
+                5000,
+                VoiceEncryptionMode::aead_aes256_gcm_rtpsize(),
+                42,
+            ),
+        );
+        manager.set_speaking(
+            guild_id.clone(),
+            super::VoiceSpeakingState::new(VoiceSpeakingFlags::MICROPHONE, 0),
+        );
+
+        let state = manager
+            .update_voice_state(&VoiceState {
+                guild_id: Some(guild_id.clone()),
+                channel_id: None,
+                session_id: None,
+                self_mute: true,
+                self_deaf: true,
+                ..VoiceState::default()
+            })
+            .expect("disconnect update should keep tracked state");
+
+        assert_eq!(state.status, VoiceConnectionStatus::Disconnected);
+        assert_eq!(state.endpoint, None);
+        assert_eq!(state.session_id, None);
+        assert_eq!(state.token, None);
+        assert_eq!(state.transport, None);
+        assert_eq!(state.speaking, None);
+        assert_eq!(manager.identify_command(guild_id.clone(), "3"), None);
+        assert!(matches!(
+            manager.events().last(),
+            Some(super::VoiceEvent::Disconnected { guild_id: event_guild_id }) if *event_guild_id == guild_id
+        ));
+
+        let tracked = manager.connection(guild_id).unwrap();
+        assert_eq!(tracked.status, VoiceConnectionStatus::Disconnected);
+        assert_eq!(tracked.endpoint, None);
+        assert_eq!(tracked.session_id, None);
+        assert_eq!(tracked.token, None);
+        assert_eq!(tracked.transport, None);
+        assert_eq!(tracked.speaking, None);
+    }
+
+    #[test]
+    fn voice_server_endpoint_loss_clears_runtime_state_and_marks_disconnected() {
+        let mut manager = VoiceManager::new();
+        let guild_id = Snowflake::from("1");
+
+        manager.connect(
+            VoiceConnectionConfig::new(guild_id.clone(), "2")
+                .session_id("session")
+                .token("token")
+                .endpoint("voice.discord.media"),
+        );
+        manager.configure_transport(
+            guild_id.clone(),
+            VoiceTransportState::udp(
+                "127.0.0.1",
+                5000,
+                VoiceEncryptionMode::aead_aes256_gcm_rtpsize(),
+                42,
+            ),
+        );
+        manager.set_speaking(
+            guild_id.clone(),
+            super::VoiceSpeakingState::new(VoiceSpeakingFlags::MICROPHONE, 0),
+        );
+
+        let state = manager
+            .update_server(VoiceServerUpdate {
+                guild_id: guild_id.clone(),
+                token: "replacement-token".to_string(),
+                endpoint: None,
+            })
+            .expect("server update should keep tracked state");
+
+        assert_eq!(state.status, VoiceConnectionStatus::Disconnected);
+        assert_eq!(state.endpoint, None);
+        assert_eq!(state.session_id, None);
+        assert_eq!(state.token, None);
+        assert_eq!(state.transport, None);
+        assert_eq!(state.speaking, None);
+        assert_eq!(manager.resume_command(guild_id.clone()), None);
+        assert_eq!(manager.runtime_config(guild_id.clone(), "3"), None);
+        assert!(matches!(
+            manager.events().last(),
+            Some(super::VoiceEvent::Disconnected { guild_id: event_guild_id }) if *event_guild_id == guild_id
+        ));
+
+        let tracked = manager.connection(guild_id).unwrap();
+        assert_eq!(tracked.status, VoiceConnectionStatus::Disconnected);
+        assert_eq!(tracked.endpoint, None);
+        assert_eq!(tracked.session_id, None);
+        assert_eq!(tracked.token, None);
+        assert_eq!(tracked.transport, None);
+        assert_eq!(tracked.speaking, None);
     }
 }
