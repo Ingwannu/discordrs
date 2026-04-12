@@ -292,10 +292,52 @@ mod tests {
     use std::time::Duration;
 
     use serde_json::json;
+    use serde_json::Value;
 
     use crate::event::decode_event;
+    use crate::model::Interaction;
 
-    use super::CollectorHub;
+    use super::{recv_with_timeout, CollectorHub};
+
+    fn interaction_event(payload: Value) -> crate::event::Event {
+        decode_event("INTERACTION_CREATE", payload).expect("valid interaction event")
+    }
+
+    fn ping_interaction(id: &str) -> crate::event::Event {
+        interaction_event(json!({
+            "id": id,
+            "application_id": "2",
+            "token": "token",
+            "type": 1
+        }))
+    }
+
+    fn component_interaction(id: &str, custom_id: &str) -> crate::event::Event {
+        interaction_event(json!({
+            "id": id,
+            "application_id": "2",
+            "token": "token",
+            "type": 3,
+            "data": {
+                "custom_id": custom_id,
+                "component_type": 2,
+                "values": ["one"]
+            }
+        }))
+    }
+
+    fn modal_interaction(id: &str, custom_id: &str) -> crate::event::Event {
+        interaction_event(json!({
+            "id": id,
+            "application_id": "2",
+            "token": "token",
+            "type": 5,
+            "data": {
+                "custom_id": custom_id,
+                "components": []
+            }
+        }))
+    }
 
     #[tokio::test]
     async fn message_collector_stops_after_max_items() {
@@ -350,5 +392,187 @@ mod tests {
             .expect("collector should still yield the newest buffered message");
         assert_eq!(message.id.as_str(), "4");
         assert!(collector.lagged_events() >= 1);
+    }
+
+    #[tokio::test]
+    async fn interaction_component_and_modal_collectors_yield_typed_variants() {
+        let hub = CollectorHub::new();
+        let mut interaction_collector = hub
+            .interaction_collector()
+            .filter(|interaction| matches!(interaction, Interaction::Component(_)))
+            .timeout(Duration::from_secs(1));
+        let mut component_collector = hub.component_collector().timeout(Duration::from_secs(1));
+        let mut modal_collector = hub.modal_collector().timeout(Duration::from_secs(1));
+
+        hub.publish(
+            decode_event(
+                "INTERACTION_CREATE",
+                json!({
+                    "id": "1",
+                    "application_id": "2",
+                    "token": "token",
+                    "type": 1
+                }),
+            )
+            .unwrap(),
+        );
+        hub.publish(
+            decode_event(
+                "INTERACTION_CREATE",
+                json!({
+                    "id": "3",
+                    "application_id": "4",
+                    "token": "token",
+                    "type": 3,
+                    "data": {
+                        "custom_id": "button",
+                        "component_type": 2,
+                        "values": ["one"]
+                    }
+                }),
+            )
+            .unwrap(),
+        );
+        hub.publish(
+            decode_event(
+                "INTERACTION_CREATE",
+                json!({
+                    "id": "5",
+                    "application_id": "6",
+                    "token": "token",
+                    "type": 5,
+                    "data": {
+                        "custom_id": "modal",
+                        "components": []
+                    }
+                }),
+            )
+            .unwrap(),
+        );
+
+        match interaction_collector.next().await {
+            Some(Interaction::Component(component)) => {
+                assert_eq!(component.data.custom_id, "button");
+            }
+            other => panic!("unexpected filtered interaction: {other:?}"),
+        }
+
+        let component = component_collector
+            .next()
+            .await
+            .expect("component interaction");
+        assert_eq!(component.context.id.as_str(), "3");
+        assert_eq!(component.context.application_id.as_str(), "4");
+        assert_eq!(component.context.token, "token");
+        assert_eq!(component.data.custom_id, "button");
+        assert_eq!(component.data.component_type, 2);
+        assert_eq!(component.data.values, vec!["one".to_string()]);
+
+        let modal = modal_collector.next().await.expect("modal interaction");
+        assert_eq!(modal.context.id.as_str(), "5");
+        assert_eq!(modal.submission.custom_id, "modal");
+    }
+
+    #[tokio::test]
+    async fn interaction_collector_filter_skips_non_matches_and_max_items_chain_is_usable() {
+        let hub = CollectorHub::new();
+        let mut collector = hub
+            .interaction_collector()
+            .max_items(1)
+            .filter(|interaction| matches!(interaction, Interaction::Component(_)))
+            .timeout(Duration::from_secs(1));
+
+        hub.publish(ping_interaction("1"));
+        hub.publish(component_interaction("2", "keep-me"));
+
+        match collector.next().await {
+            Some(Interaction::Component(component)) => {
+                assert_eq!(component.context.id.as_str(), "2");
+                assert_eq!(component.data.custom_id, "keep-me");
+            }
+            other => panic!("unexpected interaction after filter skip: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn interaction_collector_reports_lagged_interactions() {
+        let hub = CollectorHub::with_capacity(1);
+        let mut collector = hub.interaction_collector().timeout(Duration::from_secs(1));
+
+        hub.publish(ping_interaction("1"));
+        hub.publish(component_interaction("2", "older"));
+        hub.publish(modal_interaction("3", "latest"));
+
+        let interaction = collector
+            .next()
+            .await
+            .expect("collector should yield the newest buffered interaction");
+        match interaction {
+            Interaction::ModalSubmit(modal) => {
+                assert_eq!(modal.context.id.as_str(), "3");
+                assert_eq!(modal.submission.custom_id, "latest");
+            }
+            other => panic!("unexpected interaction after lag: {other:?}"),
+        }
+        assert!(collector.lagged_events() >= 1);
+    }
+
+    #[tokio::test]
+    async fn component_collector_returns_none_after_only_non_component_events() {
+        let hub = CollectorHub::new();
+        let mut collector = hub.component_collector().timeout(Duration::from_secs(1));
+
+        hub.publish(ping_interaction("1"));
+        hub.publish(modal_interaction("2", "not-a-component"));
+        drop(hub);
+
+        assert!(collector.next().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn component_collector_times_out_when_no_component_arrives() {
+        let hub = CollectorHub::new();
+        let mut collector = hub.component_collector().timeout(Duration::from_millis(20));
+
+        hub.publish(ping_interaction("1"));
+
+        assert!(collector.next().await.is_none());
+        assert_eq!(collector.lagged_events(), 0);
+    }
+
+    #[tokio::test]
+    async fn modal_collector_returns_none_after_only_non_modal_events() {
+        let hub = CollectorHub::new();
+        let mut collector = hub.modal_collector().timeout(Duration::from_secs(1));
+
+        hub.publish(ping_interaction("1"));
+        hub.publish(component_interaction("2", "button"));
+        drop(hub);
+
+        assert!(collector.next().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn modal_collector_times_out_when_no_modal_arrives() {
+        let hub = CollectorHub::new();
+        let mut collector = hub.modal_collector().timeout(Duration::from_millis(20));
+
+        hub.publish(component_interaction("1", "button"));
+
+        assert!(collector.next().await.is_none());
+        assert_eq!(collector.lagged_events(), 0);
+    }
+
+    #[tokio::test]
+    async fn recv_with_timeout_returns_none_when_future_exceeds_deadline() {
+        let timed_out = recv_with_timeout(Some(Duration::from_millis(5)), async {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            Some(1_u8)
+        })
+        .await;
+        assert_eq!(timed_out, None);
+
+        let completed = recv_with_timeout(None, async { Some(2_u8) }).await;
+        assert_eq!(completed, Some(2));
     }
 }

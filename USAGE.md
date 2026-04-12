@@ -517,3 +517,12 @@ async fn handle_modal(http: &DiscordHttpClient, payload: &Value) -> Result<(), d
 - `spawn_shards(...)` is the right choice when you want status inspection, manual shutdown, or supervisor-driven shard control.
 - `start_shards(...)` is the right choice when you only want the runtime to own the shard lifecycle and block until it exits.
 - `voice` currently provides runtime handshake and state plumbing, not a full production media transport stack.
+
+## 15. Testing And Coverage
+
+Coverage-specific workflow guidance lives in:
+
+- [`discordrsdocs/docs/guide/testing-and-coverage.md`](discordrsdocs/docs/guide/testing-and-coverage.md)
+
+Use that guide when you need repeatable local HTTP harnesses, websocket harnesses, or a fast order
+for attacking low-coverage modules.

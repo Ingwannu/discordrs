@@ -350,8 +350,11 @@ mod tests {
     use super::{ActionRowBuilder, ButtonBuilder, ComponentsV2Message, SelectMenuBuilder};
     use crate::builders::container::TextDisplayBuilder;
     use crate::builders::modal::TextInputBuilder;
+    use crate::builders::{
+        ContainerBuilder, FileBuilder, MediaGalleryBuilder, SectionBuilder, SeparatorBuilder,
+    };
     use crate::constants::{button_style, component_type, text_input_style};
-    use crate::types::{Emoji, SelectOption};
+    use crate::types::{Emoji, MediaGalleryItem, SelectOption};
     use serde_json::json;
 
     #[test]
@@ -677,6 +680,36 @@ mod tests {
         assert_eq!(
             payload[2].get("marker").and_then(|value| value.as_str()),
             Some("raw")
+        );
+    }
+
+    #[test]
+    fn components_v2_message_supports_all_builder_entry_points() {
+        let payload = ComponentsV2Message::new()
+            .add_container(
+                ContainerBuilder::new().add_text_display(TextDisplayBuilder::new("inside")),
+            )
+            .add_media_gallery(
+                MediaGalleryBuilder::new()
+                    .add_item(MediaGalleryItem::new("https://example.com/image.png")),
+            )
+            .add_separator(SeparatorBuilder::new())
+            .add_section(SectionBuilder::new().add_text_display(TextDisplayBuilder::new("section")))
+            .add_file(FileBuilder::new("https://example.com/file.txt"))
+            .build();
+
+        assert_eq!(
+            payload
+                .iter()
+                .map(|component| component.get("type").and_then(|value| value.as_u64()))
+                .collect::<Vec<_>>(),
+            vec![
+                Some(component_type::CONTAINER as u64),
+                Some(component_type::MEDIA_GALLERY as u64),
+                Some(component_type::SEPARATOR as u64),
+                Some(component_type::SECTION as u64),
+                Some(component_type::FILE as u64),
+            ]
         );
     }
 }

@@ -78,6 +78,7 @@ A navigation-focused docs website (similar to the discord.js docs browsing style
 - Live URL: `http://discordrs.teamwicked.me/discordrsdocs/#/`
 - Korean URL: `http://discordrs.teamwicked.me/discordrsdocs/#/ko/README`
 - Entry: [`discordrsdocs/index.html`](discordrsdocs/index.html)
+- Testing guide: [`discordrsdocs/docs/guide/testing-and-coverage.md`](discordrsdocs/docs/guide/testing-and-coverage.md)
 - Local preview:
   ```bash
   python3 -m http.server 8080 --directory discordrsdocs

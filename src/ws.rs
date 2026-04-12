@@ -157,7 +157,7 @@ fn remove_query_param(url: &mut String, key: &str) {
 
 #[cfg(test)]
 mod tests {
-    use super::{GatewayCompression, GatewayConnectionConfig};
+    use super::{GatewayCompression, GatewayConnectionConfig, GatewayEncoding};
 
     #[test]
     fn normalized_url_adds_default_query_values() {
@@ -180,5 +180,32 @@ mod tests {
             url,
             "wss://gateway.discord.gg/?encoding=json&v=10&shard=2,8"
         );
+    }
+
+    #[test]
+    fn connection_config_supports_custom_base_url_version_encoding_and_display() {
+        let config = GatewayConnectionConfig::new("gateway.discord.test")
+            .with_base_url("/gateway.discord.test/socket")
+            .version(11)
+            .encoding(GatewayEncoding::Json);
+
+        assert_eq!(GatewayEncoding::Json.as_str(), "json");
+        assert_eq!(GatewayCompression::ZlibStream.as_str(), "zlib-stream");
+        assert_eq!(
+            config.normalized_url(),
+            "wss://gateway.discord.test/socket?v=11&encoding=json"
+        );
+        assert_eq!(config.to_string(), config.normalized_url());
+    }
+
+    #[test]
+    fn normalized_url_does_not_duplicate_existing_query_parameters() {
+        let url =
+            GatewayConnectionConfig::new("wss://gateway.discord.gg/?v=9&encoding=json&shard=1,4")
+                .version(10)
+                .shard(2, 8)
+                .normalized_url();
+
+        assert_eq!(url, "wss://gateway.discord.gg/?v=9&encoding=json&shard=1,4");
     }
 }

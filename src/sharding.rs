@@ -550,4 +550,84 @@ mod tests {
         manager.remove_runtime(0).unwrap();
         assert_eq!(manager.runtime_count(), 0);
     }
+
+    #[test]
+    fn shard_config_clamps_total_and_reports_invalid_ids() {
+        let config = ShardConfig::new(0);
+        assert_eq!(config.total_shards, 1);
+        assert_eq!(config.shard_info(0).unwrap().identify_payload(), [0, 1]);
+        assert!(config.shard_info(1).is_none());
+    }
+
+    #[test]
+    fn sharding_manager_registers_ipc_broadcasts_and_reports_missing_runtimes() {
+        let mut manager = ShardingManager::new(ShardConfig::new(2));
+        let (first_tx, first_rx) = channel();
+        let (second_tx, second_rx) = channel();
+
+        manager.register_ipc(0, first_tx);
+        manager.register_ipc(1, second_tx);
+
+        assert_eq!(manager.runtime_count(), 2);
+        assert_eq!(manager.shard_infos().len(), 2);
+        assert_eq!(manager.handle(0).unwrap().info().id, 0);
+        assert!(manager.state(0).is_some());
+        assert_eq!(manager.states().len(), 2);
+        assert_eq!(manager.statuses().len(), 2);
+
+        manager
+            .broadcast(ShardIpcMessage::UpdatePresence("busy".to_string()))
+            .unwrap();
+        assert_eq!(
+            first_rx.recv().unwrap(),
+            ShardIpcMessage::UpdatePresence("busy".to_string())
+        );
+        assert_eq!(
+            second_rx.recv().unwrap(),
+            ShardIpcMessage::UpdatePresence("busy".to_string())
+        );
+
+        let missing_send = manager.send(9, ShardIpcMessage::Shutdown).unwrap_err();
+        assert!(missing_send
+            .to_string()
+            .contains("missing shard ipc channel"));
+
+        let missing_event = manager.poll_event(9).unwrap_err();
+        assert!(missing_event
+            .to_string()
+            .contains("missing shard runtime for shard 9"));
+    }
+
+    #[test]
+    fn shard_runtime_channels_manage_status_and_split_publishers() {
+        let mut manager = ShardingManager::new(ShardConfig::new(1));
+        let channels = manager.prepare_runtime(0).unwrap();
+        assert_eq!(channels.state(), ShardRuntimeState::Idle);
+
+        channels.set_state(ShardRuntimeState::Queued);
+        assert_eq!(channels.state(), ShardRuntimeState::Queued);
+
+        let publisher = channels.publisher();
+        publisher
+            .publish(ShardSupervisorEvent::GatewayError {
+                shard_id: 0,
+                message: "boom".to_string(),
+            })
+            .unwrap();
+        assert_eq!(
+            manager.status(0).unwrap().last_error.as_deref(),
+            Some("boom")
+        );
+
+        let channels = manager.prepare_runtime(0).unwrap();
+        let (command_rx, publisher) = channels.split();
+        drop(command_rx);
+        publisher
+            .publish(ShardSupervisorEvent::StateChanged {
+                shard_id: 0,
+                state: ShardRuntimeState::Running,
+            })
+            .unwrap();
+        assert_eq!(publisher.info.identify_payload(), [0, 1]);
+    }
 }

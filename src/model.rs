@@ -871,10 +871,16 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        ApplicationCommand, ApplicationCommandOptionChoice, Channel, CommandInteractionOption,
-        ComponentInteraction, ComponentInteractionData, CreateMessage, DiscordModel, EmbedField,
-        Interaction, InteractionContextData, PermissionsBitField, Snowflake, User,
+        ApplicationCommand, ApplicationCommandOptionChoice, Attachment, AutocompleteInteraction,
+        Channel, ChatInputCommandInteraction, CommandInteractionData, CommandInteractionOption,
+        ComponentInteraction, ComponentInteractionData, CreateDmChannel, CreateMessage,
+        DiscordModel, Embed, EmbedField, GatewayBot, Guild, Interaction,
+        InteractionCallbackResponse, InteractionContextData, Member, Message,
+        MessageContextMenuInteraction, ModalSubmitInteraction, PermissionsBitField,
+        PingInteraction, Presence, Reaction, Role, SessionStartLimit, Snowflake, StickerItem,
+        ThreadMetadata, User, UserContextMenuInteraction,
     };
+    use crate::parsers::V2ModalSubmission;
 
     #[test]
     fn snowflake_deserializes_from_string_and_number() {
@@ -1073,5 +1079,206 @@ mod tests {
             Some("1759288472266248192")
         );
         assert!(DiscordModel::created_at(&user).is_some());
+    }
+
+    #[test]
+    fn interaction_accessors_cover_all_variants() {
+        fn context(id: &str, application_id: &str, token: &str) -> InteractionContextData {
+            InteractionContextData {
+                id: Snowflake::from(id),
+                application_id: Snowflake::from(application_id),
+                token: token.to_string(),
+                ..InteractionContextData::default()
+            }
+        }
+
+        let interactions = vec![
+            Interaction::Ping(PingInteraction {
+                context: context("1", "10", "ping-token"),
+            }),
+            Interaction::ChatInputCommand(ChatInputCommandInteraction {
+                context: context("2", "20", "chat-token"),
+                data: CommandInteractionData::default(),
+            }),
+            Interaction::UserContextMenu(UserContextMenuInteraction {
+                context: context("3", "30", "user-token"),
+                data: CommandInteractionData::default(),
+            }),
+            Interaction::MessageContextMenu(MessageContextMenuInteraction {
+                context: context("4", "40", "message-token"),
+                data: CommandInteractionData::default(),
+            }),
+            Interaction::Autocomplete(AutocompleteInteraction {
+                context: context("5", "50", "autocomplete-token"),
+                data: CommandInteractionData::default(),
+            }),
+            Interaction::Component(ComponentInteraction {
+                context: context("6", "60", "component-token"),
+                data: ComponentInteractionData::default(),
+            }),
+            Interaction::ModalSubmit(ModalSubmitInteraction {
+                context: context("7", "70", "modal-token"),
+                submission: V2ModalSubmission {
+                    custom_id: "modal".to_string(),
+                    components: vec![],
+                },
+            }),
+            Interaction::Unknown {
+                context: context("8", "80", "unknown-token"),
+                kind: 99,
+                raw_data: json!({ "kind": "unknown" }),
+            },
+        ];
+
+        let expected = [
+            ("1", "10", "ping-token"),
+            ("2", "20", "chat-token"),
+            ("3", "30", "user-token"),
+            ("4", "40", "message-token"),
+            ("5", "50", "autocomplete-token"),
+            ("6", "60", "component-token"),
+            ("7", "70", "modal-token"),
+            ("8", "80", "unknown-token"),
+        ];
+
+        for (interaction, (id, application_id, token)) in interactions.iter().zip(expected) {
+            assert_eq!(interaction.context().id.as_str(), id);
+            assert_eq!(interaction.id().as_str(), id);
+            assert_eq!(interaction.application_id().as_str(), application_id);
+            assert_eq!(interaction.token(), token);
+        }
+    }
+
+    #[test]
+    fn discord_model_trait_returns_ids_for_core_models() {
+        let guild = Guild {
+            id: Snowflake::from("11"),
+            name: "Guild".to_string(),
+            ..Guild::default()
+        };
+        let channel = Channel {
+            id: Snowflake::from("12"),
+            kind: 0,
+            ..Channel::default()
+        };
+        let message = Message {
+            id: Snowflake::from("13"),
+            channel_id: Snowflake::from("99"),
+            ..Message::default()
+        };
+        let role = Role {
+            id: Snowflake::from("14"),
+            name: "Admin".to_string(),
+            ..Role::default()
+        };
+        let attachment = Attachment {
+            id: Snowflake::from("15"),
+            filename: "file.txt".to_string(),
+            ..Attachment::default()
+        };
+
+        assert_eq!(DiscordModel::id(&guild).as_str(), "11");
+        assert_eq!(DiscordModel::id(&channel).as_str(), "12");
+        assert_eq!(DiscordModel::id(&message).as_str(), "13");
+        assert_eq!(DiscordModel::id(&role).as_str(), "14");
+        assert_eq!(DiscordModel::id(&attachment).as_str(), "15");
+    }
+
+    #[test]
+    fn serde_defaults_fill_missing_fields_for_core_models() {
+        let member: Member = serde_json::from_value(json!({})).unwrap();
+        let message: Message = serde_json::from_value(json!({
+            "id": "55",
+            "channel_id": "66"
+        }))
+        .unwrap();
+        let reaction: Reaction = serde_json::from_value(json!({})).unwrap();
+        let component: ComponentInteractionData = serde_json::from_value(json!({
+            "custom_id": "menu",
+            "component_type": 3
+        }))
+        .unwrap();
+        let thread_metadata: ThreadMetadata = serde_json::from_value(json!({})).unwrap();
+
+        assert!(member.roles.is_empty());
+        assert_eq!(message.content, "");
+        assert!(message.mentions.is_empty());
+        assert!(message.attachments.is_empty());
+        assert!(message.embeds.is_empty());
+        assert!(message.reactions.is_empty());
+        assert_eq!(reaction.count, 0);
+        assert!(!reaction.me);
+        assert!(reaction.emoji.is_none());
+        assert!(component.values.is_empty());
+        assert!(!thread_metadata.archived);
+        assert!(!thread_metadata.locked);
+        assert!(thread_metadata.auto_archive_duration.is_none());
+    }
+
+    #[test]
+    fn simple_payload_models_keep_wire_aliases_and_omit_absent_optionals() {
+        let callback = InteractionCallbackResponse {
+            kind: 4,
+            ..InteractionCallbackResponse::default()
+        };
+        let dm_channel = CreateDmChannel {
+            recipient_id: Snowflake::from("321"),
+        };
+        let sticker = StickerItem {
+            id: Snowflake::from("654"),
+            name: "party".to_string(),
+            kind: Some(1),
+        };
+        let gateway = GatewayBot {
+            url: "wss://gateway.discord.gg".to_string(),
+            shards: 2,
+            session_start_limit: SessionStartLimit {
+                total: 1000,
+                remaining: 999,
+                reset_after: 60_000,
+                max_concurrency: 1,
+            },
+        };
+
+        assert_eq!(
+            serde_json::to_value(&callback).unwrap(),
+            json!({ "type": 4 })
+        );
+        assert_eq!(
+            serde_json::to_value(&dm_channel).unwrap(),
+            json!({ "recipient_id": "321" })
+        );
+        assert_eq!(
+            serde_json::to_value(&sticker).unwrap(),
+            json!({ "id": "654", "name": "party", "format_type": 1 })
+        );
+        assert_eq!(
+            serde_json::to_value(&gateway).unwrap()["session_start_limit"]["remaining"],
+            999
+        );
+    }
+
+    #[test]
+    fn embed_presence_and_permissions_cover_optional_and_numeric_serde_paths() {
+        let embed = Embed {
+            title: Some("Docs".to_string()),
+            ..Embed::default()
+        };
+        let presence = Presence {
+            user_id: Some(Snowflake::from("777")),
+            ..Presence::default()
+        };
+        let numeric_permissions: PermissionsBitField = serde_json::from_value(json!(16)).unwrap();
+        let invalid_timestamp = Snowflake::new("not-a-number");
+
+        let embed_json = serde_json::to_value(&embed).unwrap();
+        let presence_json = serde_json::to_value(&presence).unwrap();
+
+        assert_eq!(embed_json["title"], json!("Docs"));
+        assert_eq!(embed_json["fields"], json!([]));
+        assert!(embed_json.get("description").is_none());
+        assert_eq!(presence_json, json!({ "user_id": "777" }));
+        assert_eq!(numeric_permissions.bits(), 16);
+        assert_eq!(invalid_timestamp.timestamp(), None);
     }
 }

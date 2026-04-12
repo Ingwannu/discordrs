@@ -454,10 +454,73 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        components_v2_flags, ComponentsV2Payload, INTERACTION_RESPONSE_AUTOCOMPLETE_RESULT,
+        components_v2_flags, defer_and_followup_container, defer_interaction,
+        defer_update_interaction, delete_followup_response, delete_original_response,
+        edit_original_response, followup_message, followup_with_container, get_original_response,
+        launch_activity, respond_component_with_components_v2, respond_component_with_container,
+        respond_modal_with_container, respond_to_interaction, respond_with_autocomplete_choices,
+        respond_with_components_v2, respond_with_container, respond_with_message,
+        respond_with_modal, respond_with_modal_typed, update_component_with_container,
+        update_interaction_message, ComponentsV2Payload, INTERACTION_RESPONSE_AUTOCOMPLETE_RESULT,
         INTERACTION_RESPONSE_DEFERRED_UPDATE_MESSAGE, INTERACTION_RESPONSE_LAUNCH_ACTIVITY,
+        INTERACTION_RESPONSE_UPDATE_MESSAGE,
+    };
+    use crate::builders::{
+        ComponentsV2Message, ContainerBuilder, ModalBuilder, TextDisplayBuilder, TextInputBuilder,
     };
     use crate::constants::MESSAGE_FLAG_IS_COMPONENTS_V2;
+    use crate::error::DiscordError;
+    use crate::http::DiscordHttpClient;
+    use crate::model::{
+        ApplicationCommandOptionChoice, CreateMessage, InteractionCallbackResponse,
+        InteractionContextData, Snowflake,
+    };
+
+    fn sample_http(application_id: u64) -> DiscordHttpClient {
+        DiscordHttpClient::new("test-token", application_id)
+    }
+
+    fn sample_context(application_id: &str, token: &str) -> InteractionContextData {
+        InteractionContextData {
+            id: Snowflake::from("111"),
+            application_id: Snowflake::from(application_id),
+            token: token.to_string(),
+            ..InteractionContextData::default()
+        }
+    }
+
+    fn sample_container() -> ContainerBuilder {
+        ContainerBuilder::new().add_text_display(TextDisplayBuilder::new("hello helpers"))
+    }
+
+    fn sample_modal() -> ModalBuilder {
+        ModalBuilder::new("helper-modal", "Helper Modal")
+            .add_text_input(TextInputBuilder::short("name", "Name"))
+    }
+
+    fn sample_components_message() -> ComponentsV2Message {
+        ComponentsV2Message::new().add_text_display(TextDisplayBuilder::new("hello helpers"))
+    }
+
+    fn sample_message() -> CreateMessage {
+        CreateMessage {
+            content: Some("hello".to_string()),
+            flags: Some(8),
+            ..CreateMessage::default()
+        }
+    }
+
+    fn assert_model_error_contains(error: DiscordError, expected: &str) {
+        match error {
+            DiscordError::Model { message } => {
+                assert!(
+                    message.contains(expected),
+                    "expected `{expected}` in `{message}`"
+                );
+            }
+            other => panic!("expected model error containing `{expected}`, got {other:?}"),
+        }
+    }
 
     #[test]
     fn helper_constants_cover_new_callback_types() {
@@ -497,6 +560,189 @@ mod tests {
                 "components": [component],
                 "flags": MESSAGE_FLAG_IS_COMPONENTS_V2 | (1 << 6),
             })
+        );
+    }
+
+    #[tokio::test]
+    async fn json_interaction_helpers_validate_bad_tokens_before_network() {
+        let http = sample_http(123);
+
+        assert_model_error_contains(
+            respond_with_container(&http, "111", "bad/token", sample_container(), true)
+                .await
+                .unwrap_err(),
+            "interaction_token",
+        );
+        assert_model_error_contains(
+            respond_component_with_container(&http, "111", "bad/token", sample_container(), false)
+                .await
+                .unwrap_err(),
+            "interaction_token",
+        );
+        assert_model_error_contains(
+            respond_modal_with_container(&http, "111", "bad/token", sample_container(), true)
+                .await
+                .unwrap_err(),
+            "interaction_token",
+        );
+        assert_model_error_contains(
+            update_component_with_container(&http, "111", "bad/token", sample_container())
+                .await
+                .unwrap_err(),
+            "interaction_token",
+        );
+        assert_model_error_contains(
+            respond_with_modal(&http, "111", "bad/token", sample_modal())
+                .await
+                .unwrap_err(),
+            "interaction_token",
+        );
+        assert_model_error_contains(
+            respond_with_components_v2(
+                &http,
+                "111",
+                "bad/token",
+                sample_components_message(),
+                true,
+            )
+            .await
+            .unwrap_err(),
+            "interaction_token",
+        );
+        assert_model_error_contains(
+            respond_component_with_components_v2(
+                &http,
+                "111",
+                "bad/token",
+                sample_components_message(),
+                false,
+            )
+            .await
+            .unwrap_err(),
+            "interaction_token",
+        );
+        assert_model_error_contains(
+            defer_and_followup_container(&http, "111", "bad/token", sample_container(), true)
+                .await
+                .unwrap_err(),
+            "interaction_token",
+        );
+    }
+
+    #[tokio::test]
+    async fn typed_interaction_helpers_validate_bad_context_tokens_before_network() {
+        let http = sample_http(123);
+        let context = sample_context("456", "bad/token");
+
+        assert_model_error_contains(
+            respond_to_interaction(
+                &http,
+                &context,
+                InteractionCallbackResponse {
+                    kind: INTERACTION_RESPONSE_UPDATE_MESSAGE,
+                    data: Some(json!({ "content": "hello" })),
+                },
+            )
+            .await
+            .unwrap_err(),
+            "interaction_token",
+        );
+        assert_model_error_contains(
+            respond_with_message(&http, &context, sample_message(), true)
+                .await
+                .unwrap_err(),
+            "interaction_token",
+        );
+        assert_model_error_contains(
+            respond_with_modal_typed(&http, &context, sample_modal())
+                .await
+                .unwrap_err(),
+            "interaction_token",
+        );
+        assert_model_error_contains(
+            defer_interaction(&http, &context, true).await.unwrap_err(),
+            "interaction_token",
+        );
+        assert_model_error_contains(
+            defer_update_interaction(&http, &context).await.unwrap_err(),
+            "interaction_token",
+        );
+        assert_model_error_contains(
+            update_interaction_message(&http, &context, sample_message())
+                .await
+                .unwrap_err(),
+            "interaction_token",
+        );
+        assert_model_error_contains(
+            respond_with_autocomplete_choices(
+                &http,
+                &context,
+                vec![ApplicationCommandOptionChoice::new("One", "1")],
+            )
+            .await
+            .unwrap_err(),
+            "interaction_token",
+        );
+        assert_model_error_contains(
+            launch_activity(&http, &context).await.unwrap_err(),
+            "interaction_token",
+        );
+    }
+
+    #[tokio::test]
+    async fn followup_helpers_validate_application_id_and_path_segments_before_network() {
+        let http_without_application_id = sample_http(0);
+        let http = sample_http(123);
+        let zero_application_context = sample_context("0", "followup-token");
+        let bad_token_context = sample_context("456", "bad/token");
+        let good_context = sample_context("456", "followup-token");
+
+        assert_model_error_contains(
+            followup_with_container(
+                &http_without_application_id,
+                "followup-token",
+                sample_container(),
+                true,
+            )
+            .await
+            .unwrap_err(),
+            "application_id must be set",
+        );
+        assert_model_error_contains(
+            followup_message(&http, &zero_application_context, sample_message(), false)
+                .await
+                .unwrap_err(),
+            "application_id must be set",
+        );
+        assert_model_error_contains(
+            followup_message(&http, &bad_token_context, sample_message(), true)
+                .await
+                .unwrap_err(),
+            "interaction_token",
+        );
+        assert_model_error_contains(
+            get_original_response(&http, &zero_application_context)
+                .await
+                .unwrap_err(),
+            "application_id must be set",
+        );
+        assert_model_error_contains(
+            edit_original_response(&http, &bad_token_context, sample_message())
+                .await
+                .unwrap_err(),
+            "interaction_token",
+        );
+        assert_model_error_contains(
+            delete_original_response(&http, &bad_token_context)
+                .await
+                .unwrap_err(),
+            "interaction_token",
+        );
+        assert_model_error_contains(
+            delete_followup_response(&http, &good_context, "bad/id")
+                .await
+                .unwrap_err(),
+            "message_id",
         );
     }
 }

@@ -388,4 +388,71 @@ mod tests {
         let col: Collection<&str, i32> = vec![("a", 1), ("b", 2)].into_iter().collect();
         assert_eq!(col.len(), 2);
     }
+
+    #[test]
+    fn collection_exposes_mutation_and_iteration_helpers() {
+        let mut col: Collection<String, i32> = Collection::with_capacity(4);
+        assert!(col.is_empty());
+
+        col.extend(vec![
+            ("a".to_string(), 1),
+            ("b".to_string(), 2),
+            ("c".to_string(), 3),
+        ]);
+        assert!(col.contains_key(&"b".to_string()));
+
+        *col.get_mut(&"b".to_string()).unwrap() = 20;
+        assert_eq!(col.get(&"b".to_string()), Some(&20));
+
+        let mut keys = col.key_vec();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec!["a".to_string(), "b".to_string(), "c".to_string()]
+        );
+
+        let mut values = col.to_vec();
+        values.sort();
+        assert_eq!(values, vec![1, 3, 20]);
+
+        let iterated = col.iter().count();
+        let key_count = col.keys().count();
+        let value_count = col.values().count();
+        assert_eq!(iterated, 3);
+        assert_eq!(key_count, 3);
+        assert_eq!(value_count, 3);
+
+        assert!(col.first().is_some());
+        assert!(col.last().is_some());
+        assert_eq!(col.at(1).copied(), col.values().nth(1).copied());
+        assert!(col.random().is_some());
+
+        col.clear();
+        assert!(col.is_empty());
+    }
+
+    #[test]
+    fn collection_flat_map_and_filter_map_preserve_matching_entries() {
+        let col: Collection<&str, i32> = vec![("a", 1), ("b", 2), ("c", 3)].into_iter().collect();
+
+        let mut duplicated =
+            col.flat_map(|key, value| vec![format!("{key}:{value}"), key.to_string()]);
+        duplicated.sort();
+        assert_eq!(
+            duplicated,
+            vec![
+                "a".to_string(),
+                "a:1".to_string(),
+                "b".to_string(),
+                "b:2".to_string(),
+                "c".to_string(),
+                "c:3".to_string()
+            ]
+        );
+
+        let mut filtered =
+            col.filter_map(|key, value| (value % 2 == 1).then(|| format!("{key}:{value}")));
+        filtered.sort();
+        assert_eq!(filtered, vec!["a:1".to_string(), "c:3".to_string()]);
+    }
 }

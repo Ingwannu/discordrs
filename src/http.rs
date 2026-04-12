@@ -29,6 +29,8 @@ pub struct RestClient {
     token: String,
     application_id: AtomicU64,
     rate_limits: Arc<RateLimitState>,
+    #[cfg(test)]
+    base_url: String,
 }
 
 pub type DiscordHttpClient = RestClient;
@@ -40,7 +42,34 @@ impl RestClient {
             token: token.into(),
             application_id: AtomicU64::new(application_id),
             rate_limits: Arc::new(RateLimitState::default()),
+            #[cfg(test)]
+            base_url: API_BASE.to_string(),
         }
+    }
+
+    #[cfg(test)]
+    fn new_with_base_url(
+        token: impl Into<String>,
+        application_id: u64,
+        base_url: impl Into<String>,
+    ) -> Self {
+        Self {
+            client: Client::new(),
+            token: token.into(),
+            application_id: AtomicU64::new(application_id),
+            rate_limits: Arc::new(RateLimitState::default()),
+            base_url: base_url.into(),
+        }
+    }
+
+    #[cfg(test)]
+    fn api_base(&self) -> &str {
+        &self.base_url
+    }
+
+    #[cfg(not(test))]
+    fn api_base(&self) -> &str {
+        API_BASE
     }
 
     pub fn application_id(&self) -> u64 {
@@ -804,7 +833,7 @@ impl RestClient {
         } else {
             format!("/{path}")
         };
-        let url = format!("{API_BASE}{normalized_path}");
+        let url = format!("{}{}", self.api_base(), normalized_path);
 
         let mut request_builder = self
             .client
@@ -1150,6 +1179,8 @@ async fn sleep_for_retry_after(retry_after_seconds: f64) {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+    use std::sync::{Arc, Mutex};
     use std::time::{Duration, Instant};
 
     use super::{
@@ -1157,12 +1188,285 @@ mod tests {
         execute_webhook_path, followup_webhook_path, global_commands_path, header_string,
         interaction_callback_path, parse_body_value, rate_limit_route_key,
         request_uses_bot_authorization, sleep_for_retry_after, validate_token_path_segment,
-        RateLimitState,
+        RateLimitState, RestClient,
     };
+    use crate::command::{command_type, CommandDefinition};
     use crate::error::DiscordError;
-    use crate::model::Snowflake;
+    use crate::model::{CreateMessage, InteractionCallbackResponse, Snowflake};
     use reqwest::header::{HeaderMap, HeaderValue};
     use reqwest::{Method, StatusCode};
+    use serde_json::json;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+    use tokio::task::JoinHandle;
+
+    #[derive(Debug)]
+    struct PlannedResponse {
+        status: StatusCode,
+        headers: Vec<(String, String)>,
+        body: String,
+    }
+
+    impl PlannedResponse {
+        fn json(status: StatusCode, body: serde_json::Value) -> Self {
+            Self {
+                status,
+                headers: vec![("Content-Type".to_string(), "application/json".to_string())],
+                body: body.to_string(),
+            }
+        }
+
+        fn text(status: StatusCode, body: impl Into<String>) -> Self {
+            Self {
+                status,
+                headers: vec![("Content-Type".to_string(), "text/plain".to_string())],
+                body: body.into(),
+            }
+        }
+
+        fn empty(status: StatusCode) -> Self {
+            Self {
+                status,
+                headers: Vec::new(),
+                body: String::new(),
+            }
+        }
+    }
+
+    #[derive(Debug, Clone)]
+    struct RecordedRequest {
+        method: String,
+        path: String,
+        headers: HashMap<String, String>,
+        body: String,
+    }
+
+    impl RecordedRequest {
+        fn header(&self, name: &str) -> Option<&str> {
+            self.headers
+                .get(&name.to_ascii_lowercase())
+                .map(String::as_str)
+        }
+    }
+
+    fn find_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+        haystack
+            .windows(needle.len())
+            .position(|window| window == needle)
+    }
+
+    async fn read_recorded_request(stream: &mut tokio::net::TcpStream) -> RecordedRequest {
+        let mut buffer = Vec::new();
+        let mut header_end = None;
+        let mut content_length = 0usize;
+
+        loop {
+            let mut chunk = [0u8; 2048];
+            let read = stream.read(&mut chunk).await.expect("read request");
+            assert!(read > 0, "client disconnected before sending request");
+            buffer.extend_from_slice(&chunk[..read]);
+
+            if header_end.is_none() {
+                if let Some(index) = find_bytes(&buffer, b"\r\n\r\n") {
+                    header_end = Some(index + 4);
+                    let header_text = String::from_utf8_lossy(&buffer[..index]).to_string();
+                    content_length = header_text
+                        .split("\r\n")
+                        .find_map(|line| {
+                            let (name, value) = line.split_once(':')?;
+                            if name.eq_ignore_ascii_case("content-length") {
+                                value.trim().parse::<usize>().ok()
+                            } else {
+                                None
+                            }
+                        })
+                        .unwrap_or(0);
+                }
+            }
+
+            if let Some(end) = header_end {
+                if buffer.len() >= end + content_length {
+                    let header_text = String::from_utf8_lossy(&buffer[..end - 4]).to_string();
+                    let mut lines = header_text.split("\r\n");
+                    let request_line = lines.next().expect("request line");
+                    let mut parts = request_line.split_whitespace();
+                    let method = parts.next().expect("method").to_string();
+                    let path = parts.next().expect("path").to_string();
+                    let headers = lines
+                        .filter_map(|line| {
+                            let (name, value) = line.split_once(':')?;
+                            Some((name.trim().to_ascii_lowercase(), value.trim().to_string()))
+                        })
+                        .collect::<HashMap<_, _>>();
+                    let body =
+                        String::from_utf8_lossy(&buffer[end..end + content_length]).to_string();
+
+                    return RecordedRequest {
+                        method,
+                        path,
+                        headers,
+                        body,
+                    };
+                }
+            }
+        }
+    }
+
+    async fn write_planned_response(stream: &mut tokio::net::TcpStream, response: PlannedResponse) {
+        let status_text = response.status.canonical_reason().unwrap_or("OK");
+        let mut raw = format!(
+            "HTTP/1.1 {} {}\r\nContent-Length: {}\r\nConnection: close\r\n",
+            response.status.as_u16(),
+            status_text,
+            response.body.len()
+        );
+        for (name, value) in response.headers {
+            raw.push_str(&format!("{name}: {value}\r\n"));
+        }
+        raw.push_str("\r\n");
+
+        stream
+            .write_all(raw.as_bytes())
+            .await
+            .expect("write headers");
+        if !response.body.is_empty() {
+            stream
+                .write_all(response.body.as_bytes())
+                .await
+                .expect("write body");
+        }
+    }
+
+    async fn spawn_test_server(
+        responses: Vec<PlannedResponse>,
+    ) -> (String, Arc<Mutex<Vec<RecordedRequest>>>, JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind test server");
+        let base_url = format!("http://{}", listener.local_addr().expect("local addr"));
+        let captured = Arc::new(Mutex::new(Vec::new()));
+        let captured_for_task = Arc::clone(&captured);
+
+        let task = tokio::spawn(async move {
+            for response in responses {
+                let (mut stream, _) = listener.accept().await.expect("accept request");
+                let request = read_recorded_request(&mut stream).await;
+                captured_for_task
+                    .lock()
+                    .expect("capture mutex")
+                    .push(request);
+                write_planned_response(&mut stream, response).await;
+            }
+        });
+
+        (base_url, captured, task)
+    }
+
+    fn message_payload(id: &str, channel_id: &str, content: &str) -> serde_json::Value {
+        json!({
+            "id": id,
+            "channel_id": channel_id,
+            "content": content
+        })
+    }
+
+    fn channel_payload(id: &str, kind: u8, name: Option<&str>) -> serde_json::Value {
+        let mut channel = json!({
+            "id": id,
+            "type": kind
+        });
+        if let Some(name) = name {
+            channel["name"] = json!(name);
+        }
+        channel
+    }
+
+    fn guild_payload(id: &str, name: &str) -> serde_json::Value {
+        json!({
+            "id": id,
+            "name": name
+        })
+    }
+
+    fn role_payload(id: &str, name: &str) -> serde_json::Value {
+        json!({
+            "id": id,
+            "name": name
+        })
+    }
+
+    fn command_payload(id: &str, name: &str, description: &str) -> serde_json::Value {
+        json!({
+            "id": id,
+            "type": 1,
+            "name": name,
+            "description": description
+        })
+    }
+
+    fn gateway_payload() -> serde_json::Value {
+        json!({
+            "url": "wss://gateway.discord.gg",
+            "shards": 1,
+            "session_start_limit": {
+                "total": 10,
+                "remaining": 9,
+                "reset_after": 1000,
+                "max_concurrency": 1
+            }
+        })
+    }
+
+    fn assert_request_basics(
+        request: &RecordedRequest,
+        method: &str,
+        path: &str,
+        expected_authorization: Option<&str>,
+    ) {
+        assert_eq!(request.method, method);
+        assert_eq!(request.path, path);
+        assert_eq!(request.header("authorization"), expected_authorization);
+        assert_eq!(
+            request.header("user-agent"),
+            Some("DiscordBot (discordrs, 1.0.0)")
+        );
+        assert_eq!(request.header("content-type"), Some("application/json"));
+    }
+
+    fn sample_command() -> CommandDefinition {
+        CommandDefinition {
+            kind: command_type::CHAT_INPUT,
+            name: "ping".to_string(),
+            description: "pong".to_string(),
+            ..CommandDefinition::default()
+        }
+    }
+
+    fn sample_message() -> CreateMessage {
+        CreateMessage {
+            content: Some("hello".to_string()),
+            ..CreateMessage::default()
+        }
+    }
+
+    fn sample_interaction_response() -> InteractionCallbackResponse {
+        InteractionCallbackResponse {
+            kind: 4,
+            data: Some(json!({ "content": "ack" })),
+        }
+    }
+
+    fn assert_model_error_contains(error: DiscordError, expected: &str) {
+        match error {
+            DiscordError::Model { message } => {
+                assert!(
+                    message.contains(expected),
+                    "expected `{expected}` in `{message}`"
+                );
+            }
+            other => panic!("unexpected error variant: {other:?}"),
+        }
+    }
 
     #[test]
     fn configured_application_id_rejects_zero() {
@@ -1232,6 +1536,18 @@ mod tests {
     }
 
     #[test]
+    fn interaction_and_webhook_paths_accept_safe_segments() {
+        assert_eq!(
+            interaction_callback_path(Snowflake::from("123"), "safe-token").unwrap(),
+            "/interactions/123/safe-token/callback"
+        );
+        assert_eq!(
+            execute_webhook_path(Snowflake::from("456"), "safe-token").unwrap(),
+            "/webhooks/456/safe-token?wait=true"
+        );
+    }
+
+    #[test]
     fn execute_webhook_path_rejects_unsafe_tokens() {
         let error = execute_webhook_path(Snowflake::from("123"), "bad/token").unwrap_err();
         assert!(error.to_string().contains("webhook_token"));
@@ -1287,6 +1603,24 @@ mod tests {
     }
 
     #[test]
+    fn discord_api_error_uses_string_and_object_fallback_messages() {
+        match discord_api_error(StatusCode::BAD_REQUEST, r#""plain string""#) {
+            DiscordError::Api { message, .. } => {
+                assert_eq!(message, "plain string");
+            }
+            other => panic!("unexpected error variant: {other:?}"),
+        }
+
+        match discord_api_error(StatusCode::BAD_REQUEST, r#"{"code":7}"#) {
+            DiscordError::Api { code, message, .. } => {
+                assert_eq!(code, Some(7));
+                assert_eq!(message, r#"{"code":7}"#);
+            }
+            other => panic!("unexpected error variant: {other:?}"),
+        }
+    }
+
+    #[test]
     fn rate_limit_route_key_preserves_major_parameters() {
         assert_eq!(
             rate_limit_route_key(&Method::GET, "/channels/123/messages/456"),
@@ -1299,6 +1633,14 @@ mod tests {
         assert_eq!(
             rate_limit_route_key(&Method::GET, "/webhooks/111/222/messages/333"),
             "GET:webhooks/111/222/messages/:id"
+        );
+    }
+
+    #[test]
+    fn rate_limit_route_key_keeps_application_and_guild_major_ids() {
+        assert_eq!(
+            rate_limit_route_key(&Method::POST, "/applications/123/guilds/456/commands/789"),
+            "POST:applications/123/guilds/456/commands/:id"
         );
     }
 
@@ -1416,10 +1758,981 @@ mod tests {
         assert!(state.wait_duration("GET:anything").is_some());
     }
 
+    #[test]
+    fn rate_limit_state_shares_bucket_blocks_across_routes_after_429() {
+        let state = RateLimitState::default();
+        let route_a = rate_limit_route_key(&Method::GET, "/channels/123/messages");
+        let route_b = rate_limit_route_key(&Method::POST, "/channels/456/messages");
+
+        let mut bucket_headers = HeaderMap::new();
+        bucket_headers.insert(
+            "x-ratelimit-bucket",
+            HeaderValue::from_static("shared-bucket"),
+        );
+
+        state.observe(&route_a, &bucket_headers, StatusCode::OK, "");
+        state.observe(&route_b, &bucket_headers, StatusCode::OK, "");
+        state.observe(
+            &route_a,
+            &HeaderMap::new(),
+            StatusCode::TOO_MANY_REQUESTS,
+            r#"{"retry_after":0.05,"global":false}"#,
+        );
+
+        assert!(state.wait_duration(&route_a).is_some());
+        assert!(state.wait_duration(&route_b).is_some());
+    }
+
+    #[test]
+    fn rate_limit_state_ignores_expired_route_and_global_blocks() {
+        let state = RateLimitState::default();
+        state
+            .blocked_until
+            .lock()
+            .unwrap()
+            .insert("GET:channels/123/messages".to_string(), Instant::now());
+        *state.global_blocked_until.lock().unwrap() = Some(Instant::now());
+
+        assert!(state.wait_duration("GET:channels/123/messages").is_none());
+        assert!(state.wait_duration("GET:anything").is_none());
+    }
+
     #[tokio::test]
     async fn sleep_for_retry_after_waits_without_panicking() {
         let start = Instant::now();
         sleep_for_retry_after(0.01).await;
         assert!(start.elapsed() >= Duration::from_millis(5));
+    }
+
+    #[tokio::test]
+    async fn client_methods_reject_missing_application_id_before_request() {
+        let client = RestClient::new("token", 0);
+        let command = sample_command();
+        let commands = vec![command.clone()];
+        let body = sample_message();
+
+        assert_model_error_contains(
+            client
+                .bulk_overwrite_global_commands_typed(&commands)
+                .await
+                .unwrap_err(),
+            "application_id must be set",
+        );
+        assert_model_error_contains(
+            client.create_global_command(&command).await.unwrap_err(),
+            "application_id must be set",
+        );
+        assert_model_error_contains(
+            client.get_global_commands().await.unwrap_err(),
+            "application_id must be set",
+        );
+        assert_model_error_contains(
+            client
+                .bulk_overwrite_guild_commands_typed(Snowflake::from("456"), &commands)
+                .await
+                .unwrap_err(),
+            "application_id must be set",
+        );
+        assert_model_error_contains(
+            client
+                .create_followup_message_json("token", &json!({ "content": "hi" }))
+                .await
+                .unwrap_err(),
+            "application_id must be set",
+        );
+        assert_model_error_contains(
+            client
+                .create_followup_message("token", &body)
+                .await
+                .unwrap_err(),
+            "application_id must be set",
+        );
+        assert_model_error_contains(
+            client
+                .get_original_interaction_response("token")
+                .await
+                .unwrap_err(),
+            "application_id must be set",
+        );
+        assert_model_error_contains(
+            client
+                .edit_original_interaction_response("token", &body)
+                .await
+                .unwrap_err(),
+            "application_id must be set",
+        );
+        assert_model_error_contains(
+            client
+                .delete_original_interaction_response("token")
+                .await
+                .unwrap_err(),
+            "application_id must be set",
+        );
+        assert_model_error_contains(
+            client
+                .edit_followup_message("token", "123", &body)
+                .await
+                .unwrap_err(),
+            "application_id must be set",
+        );
+        assert_model_error_contains(
+            client
+                .delete_followup_message("token", "123")
+                .await
+                .unwrap_err(),
+            "application_id must be set",
+        );
+    }
+
+    #[tokio::test]
+    async fn client_methods_reject_unsafe_tokens_before_request() {
+        let client = RestClient::new("token", 123);
+        let body = sample_message();
+        let response = sample_interaction_response();
+
+        assert_model_error_contains(
+            client
+                .execute_webhook(Snowflake::from("456"), "bad/token", &json!({}))
+                .await
+                .unwrap_err(),
+            "webhook_token",
+        );
+        assert_model_error_contains(
+            client
+                .create_interaction_response_typed(Snowflake::from("789"), "bad/token", &response)
+                .await
+                .unwrap_err(),
+            "interaction_token",
+        );
+        assert_model_error_contains(
+            client
+                .create_interaction_response_json(Snowflake::from("789"), "bad/token", &json!({}))
+                .await
+                .unwrap_err(),
+            "interaction_token",
+        );
+        assert_model_error_contains(
+            client
+                .create_followup_message_with_application_id("123", "bad/token", &body)
+                .await
+                .unwrap_err(),
+            "interaction_token",
+        );
+        assert_model_error_contains(
+            client
+                .create_followup_message_json_with_application_id(
+                    "123",
+                    "bad/token",
+                    &json!({ "content": "hi" }),
+                )
+                .await
+                .unwrap_err(),
+            "interaction_token",
+        );
+        assert_model_error_contains(
+            client
+                .get_original_interaction_response_with_application_id("123", "bad/token")
+                .await
+                .unwrap_err(),
+            "interaction_token",
+        );
+        assert_model_error_contains(
+            client
+                .edit_original_interaction_response_with_application_id("123", "bad/token", &body)
+                .await
+                .unwrap_err(),
+            "interaction_token",
+        );
+        assert_model_error_contains(
+            client
+                .delete_original_interaction_response_with_application_id("123", "bad/token")
+                .await
+                .unwrap_err(),
+            "interaction_token",
+        );
+    }
+
+    #[tokio::test]
+    async fn client_followup_methods_validate_application_and_message_segments() {
+        let client = RestClient::new("token", 123);
+        let body = sample_message();
+
+        assert_model_error_contains(
+            client
+                .create_followup_message_json_with_application_id(
+                    "12/3",
+                    "token",
+                    &json!({ "content": "hi" }),
+                )
+                .await
+                .unwrap_err(),
+            "application_id",
+        );
+        assert_model_error_contains(
+            client
+                .create_followup_message_with_application_id("12/3", "token", &body)
+                .await
+                .unwrap_err(),
+            "application_id",
+        );
+        assert_model_error_contains(
+            client
+                .edit_followup_message_with_application_id("123", "token", "bad/id", &body)
+                .await
+                .unwrap_err(),
+            "message_id",
+        );
+        assert_model_error_contains(
+            client
+                .delete_followup_message_with_application_id("123", "token", "bad/id")
+                .await
+                .unwrap_err(),
+            "message_id",
+        );
+    }
+
+    #[test]
+    fn header_string_returns_none_for_invalid_header_bytes() {
+        let invalid = HeaderValue::from_bytes(&[0xFF]).expect("invalid but allowed header bytes");
+        assert_eq!(header_string(Some(&invalid)), None);
+    }
+
+    #[test]
+    fn rate_limit_state_does_not_block_without_reset_after_header() {
+        let state = RateLimitState::default();
+        let mut headers = HeaderMap::new();
+        headers.insert("x-ratelimit-remaining", HeaderValue::from_static("0"));
+
+        state.observe("GET:channels/123/messages", &headers, StatusCode::OK, "");
+
+        assert!(state.wait_duration("GET:channels/123/messages").is_none());
+    }
+
+    #[tokio::test]
+    async fn sleep_for_retry_after_clamps_negative_values() {
+        let start = Instant::now();
+        sleep_for_retry_after(-1.0).await;
+        assert!(start.elapsed() < Duration::from_millis(50));
+    }
+
+    #[tokio::test]
+    async fn client_message_and_channel_wrappers_hit_local_server() {
+        let responses = vec![
+            PlannedResponse::json(StatusCode::OK, message_payload("1", "100", "hello")),
+            PlannedResponse::json(StatusCode::OK, message_payload("1", "100", "updated")),
+            PlannedResponse::json(StatusCode::OK, message_payload("1", "100", "updated")),
+            PlannedResponse::json(StatusCode::OK, channel_payload("100", 0, Some("general"))),
+            PlannedResponse::json(StatusCode::OK, channel_payload("100", 0, Some("general"))),
+            PlannedResponse::json(StatusCode::OK, channel_payload("100", 0, Some("renamed"))),
+            PlannedResponse::json(
+                StatusCode::OK,
+                json!([message_payload("1", "100", "updated")]),
+            ),
+            PlannedResponse::json(
+                StatusCode::OK,
+                json!([message_payload("2", "100", "latest")]),
+            ),
+            PlannedResponse::empty(StatusCode::NO_CONTENT),
+            PlannedResponse::empty(StatusCode::NO_CONTENT),
+            PlannedResponse::empty(StatusCode::NO_CONTENT),
+            PlannedResponse::json(StatusCode::OK, json!({ "ok": true })),
+            PlannedResponse::json(StatusCode::OK, json!({ "id": "903", "content": "raw" })),
+            PlannedResponse::json(
+                StatusCode::OK,
+                json!({ "id": "903", "content": "edited raw" }),
+            ),
+            PlannedResponse::empty(StatusCode::NO_CONTENT),
+        ];
+        let (base_url, captured, server) = spawn_test_server(responses).await;
+        let client = RestClient::new_with_base_url("token", 321, base_url);
+        let body = sample_message();
+
+        let created = client
+            .create_message(Snowflake::from("100"), &body)
+            .await
+            .expect("create message");
+        assert_eq!(created.content, "hello");
+
+        let updated = client
+            .update_message(Snowflake::from("100"), Snowflake::from("1"), &body)
+            .await
+            .expect("update message");
+        assert_eq!(updated.content, "updated");
+
+        let fetched = client
+            .get_message(Snowflake::from("100"), Snowflake::from("1"))
+            .await
+            .expect("get message");
+        assert_eq!(fetched.content, "updated");
+
+        let channel = client
+            .get_channel(Snowflake::from("100"))
+            .await
+            .expect("get channel");
+        assert_eq!(channel.name.as_deref(), Some("general"));
+
+        let deleted_channel = client
+            .delete_channel(Snowflake::from("100"))
+            .await
+            .expect("delete channel");
+        assert_eq!(deleted_channel.id.as_str(), "100");
+
+        let renamed = client
+            .update_channel(Snowflake::from("100"), &json!({ "name": "renamed" }))
+            .await
+            .expect("update channel");
+        assert_eq!(renamed.name.as_deref(), Some("renamed"));
+
+        let limited_messages = client
+            .get_channel_messages(Snowflake::from("100"), Some(2))
+            .await
+            .expect("channel messages with limit");
+        assert_eq!(limited_messages.len(), 1);
+
+        let all_messages = client
+            .get_channel_messages(Snowflake::from("100"), None)
+            .await
+            .expect("channel messages without limit");
+        assert_eq!(all_messages[0].content, "latest");
+
+        client
+            .bulk_delete_messages(
+                Snowflake::from("100"),
+                vec![Snowflake::from("1"), Snowflake::from("2")],
+            )
+            .await
+            .expect("bulk delete");
+        client
+            .add_reaction(Snowflake::from("100"), Snowflake::from("1"), "spark")
+            .await
+            .expect("add reaction");
+        client
+            .remove_reaction(Snowflake::from("100"), Snowflake::from("1"), "spark")
+            .await
+            .expect("remove reaction");
+
+        let raw = client
+            .request(
+                Method::GET,
+                "channels/100/custom",
+                Option::<&serde_json::Value>::None,
+            )
+            .await
+            .expect("request with normalized path");
+        assert_eq!(raw["ok"], json!(true));
+
+        let sent = client
+            .send_message_json(Snowflake::from("100"), &json!({ "content": "raw" }))
+            .await
+            .expect("send raw message");
+        assert_eq!(sent["id"], json!("903"));
+
+        let edited = client
+            .edit_message_json(
+                Snowflake::from("100"),
+                Snowflake::from("903"),
+                &json!({ "content": "edited raw" }),
+            )
+            .await
+            .expect("edit raw message");
+        assert_eq!(edited["content"], json!("edited raw"));
+
+        client
+            .delete_message(Snowflake::from("100"), Snowflake::from("903"))
+            .await
+            .expect("delete raw message");
+
+        server.await.expect("server finished");
+        let requests = captured.lock().expect("captured requests");
+        let auth = Some("Bot token");
+
+        assert_request_basics(&requests[0], "POST", "/channels/100/messages", auth);
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&requests[0].body).unwrap()["content"],
+            json!("hello")
+        );
+        assert_request_basics(&requests[1], "PATCH", "/channels/100/messages/1", auth);
+        assert_request_basics(&requests[2], "GET", "/channels/100/messages/1", auth);
+        assert_request_basics(&requests[3], "GET", "/channels/100", auth);
+        assert_request_basics(&requests[4], "DELETE", "/channels/100", auth);
+        assert_request_basics(&requests[5], "PATCH", "/channels/100", auth);
+        assert_request_basics(&requests[6], "GET", "/channels/100/messages?limit=2", auth);
+        assert_request_basics(&requests[7], "GET", "/channels/100/messages", auth);
+        assert_request_basics(
+            &requests[8],
+            "POST",
+            "/channels/100/messages/bulk-delete",
+            auth,
+        );
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&requests[8].body).unwrap(),
+            json!({ "messages": ["1", "2"] })
+        );
+        assert_request_basics(
+            &requests[9],
+            "PUT",
+            "/channels/100/messages/1/reactions/spark/@me",
+            auth,
+        );
+        assert_request_basics(
+            &requests[10],
+            "DELETE",
+            "/channels/100/messages/1/reactions/spark/@me",
+            auth,
+        );
+        assert_request_basics(&requests[11], "GET", "/channels/100/custom", auth);
+        assert_request_basics(&requests[12], "POST", "/channels/100/messages", auth);
+        assert_request_basics(&requests[13], "PATCH", "/channels/100/messages/903", auth);
+        assert_request_basics(&requests[14], "DELETE", "/channels/100/messages/903", auth);
+    }
+
+    #[tokio::test]
+    async fn client_guild_and_command_wrappers_hit_local_server() {
+        let responses = vec![
+            PlannedResponse::json(StatusCode::OK, guild_payload("200", "guild")),
+            PlannedResponse::json(StatusCode::OK, guild_payload("200", "guild-updated")),
+            PlannedResponse::json(
+                StatusCode::OK,
+                json!([channel_payload("201", 0, Some("rules"))]),
+            ),
+            PlannedResponse::json(StatusCode::OK, channel_payload("202", 0, Some("new"))),
+            PlannedResponse::json(StatusCode::OK, json!([{}])),
+            PlannedResponse::json(StatusCode::OK, json!([{}])),
+            PlannedResponse::empty(StatusCode::NO_CONTENT),
+            PlannedResponse::empty(StatusCode::NO_CONTENT),
+            PlannedResponse::empty(StatusCode::NO_CONTENT),
+            PlannedResponse::json(StatusCode::OK, role_payload("300", "admin")),
+            PlannedResponse::json(StatusCode::OK, role_payload("300", "mod")),
+            PlannedResponse::empty(StatusCode::NO_CONTENT),
+            PlannedResponse::json(StatusCode::OK, json!({})),
+            PlannedResponse::json(StatusCode::OK, json!([role_payload("300", "mod")])),
+            PlannedResponse::json(
+                StatusCode::OK,
+                json!([command_payload("401", "ping", "pong")]),
+            ),
+            PlannedResponse::json(StatusCode::OK, command_payload("402", "pong", "reply")),
+            PlannedResponse::json(
+                StatusCode::OK,
+                json!([command_payload("401", "ping", "pong")]),
+            ),
+            PlannedResponse::json(StatusCode::OK, gateway_payload()),
+            PlannedResponse::json(
+                StatusCode::OK,
+                json!([command_payload("403", "guild", "only")]),
+            ),
+        ];
+        let (base_url, captured, server) = spawn_test_server(responses).await;
+        let client = RestClient::new_with_base_url("guild-token", 0, base_url);
+        client.set_application_id(555);
+        let command = sample_command();
+
+        let guild = client
+            .get_guild(Snowflake::from("200"))
+            .await
+            .expect("get guild");
+        assert_eq!(guild.name, "guild");
+
+        let updated = client
+            .update_guild(Snowflake::from("200"), &json!({ "name": "guild-updated" }))
+            .await
+            .expect("update guild");
+        assert_eq!(updated.name, "guild-updated");
+
+        let channels = client
+            .get_guild_channels(Snowflake::from("200"))
+            .await
+            .expect("get guild channels");
+        assert_eq!(channels.len(), 1);
+
+        let created_channel = client
+            .create_guild_channel(Snowflake::from("200"), &json!({ "name": "new" }))
+            .await
+            .expect("create guild channel");
+        assert_eq!(created_channel.id.as_str(), "202");
+
+        assert_eq!(
+            client
+                .get_guild_members(Snowflake::from("200"), Some(3))
+                .await
+                .expect("members with limit")
+                .len(),
+            1
+        );
+        assert_eq!(
+            client
+                .get_guild_members(Snowflake::from("200"), None)
+                .await
+                .expect("members without limit")
+                .len(),
+            1
+        );
+        client
+            .remove_guild_member(Snowflake::from("200"), Snowflake::from("201"))
+            .await
+            .expect("remove guild member");
+        client
+            .add_guild_member_role(
+                Snowflake::from("200"),
+                Snowflake::from("201"),
+                Snowflake::from("300"),
+            )
+            .await
+            .expect("add guild member role");
+        client
+            .remove_guild_member_role(
+                Snowflake::from("200"),
+                Snowflake::from("201"),
+                Snowflake::from("300"),
+            )
+            .await
+            .expect("remove guild member role");
+
+        let created_role = client
+            .create_role(Snowflake::from("200"), &json!({ "name": "admin" }))
+            .await
+            .expect("create role");
+        assert_eq!(created_role.name, "admin");
+
+        let updated_role = client
+            .update_role(
+                Snowflake::from("200"),
+                Snowflake::from("300"),
+                &json!({ "name": "mod" }),
+            )
+            .await
+            .expect("update role");
+        assert_eq!(updated_role.name, "mod");
+
+        client
+            .delete_role(Snowflake::from("200"), Snowflake::from("300"))
+            .await
+            .expect("delete role");
+
+        let member = client
+            .get_member(Snowflake::from("200"), Snowflake::from("201"))
+            .await
+            .expect("get member");
+        assert!(member.roles.is_empty());
+
+        let roles = client
+            .list_roles(Snowflake::from("200"))
+            .await
+            .expect("list roles");
+        assert_eq!(roles[0].name, "mod");
+
+        let overwritten = client
+            .bulk_overwrite_global_commands_typed(std::slice::from_ref(&command))
+            .await
+            .expect("bulk overwrite global commands");
+        assert_eq!(overwritten[0].name, "ping");
+
+        let created_command = client
+            .create_global_command(&CommandDefinition {
+                name: "pong".to_string(),
+                description: "reply".to_string(),
+                ..command.clone()
+            })
+            .await
+            .expect("create global command");
+        assert_eq!(created_command.name, "pong");
+
+        let global_commands = client
+            .get_global_commands()
+            .await
+            .expect("get global commands");
+        assert_eq!(global_commands.len(), 1);
+
+        let gateway = client.get_gateway_bot().await.expect("get gateway bot");
+        assert_eq!(gateway.shards, 1);
+
+        let guild_commands = client
+            .bulk_overwrite_guild_commands_typed(Snowflake::from("200"), &[command])
+            .await
+            .expect("bulk overwrite guild commands");
+        assert_eq!(guild_commands[0].name, "guild");
+
+        server.await.expect("server finished");
+        let requests = captured.lock().expect("captured requests");
+        let auth = Some("Bot guild-token");
+
+        assert_request_basics(&requests[0], "GET", "/guilds/200", auth);
+        assert_request_basics(&requests[1], "PATCH", "/guilds/200", auth);
+        assert_request_basics(&requests[2], "GET", "/guilds/200/channels", auth);
+        assert_request_basics(&requests[3], "POST", "/guilds/200/channels", auth);
+        assert_request_basics(&requests[4], "GET", "/guilds/200/members?limit=3", auth);
+        assert_request_basics(&requests[5], "GET", "/guilds/200/members", auth);
+        assert_request_basics(&requests[6], "DELETE", "/guilds/200/members/201", auth);
+        assert_request_basics(
+            &requests[7],
+            "PUT",
+            "/guilds/200/members/201/roles/300",
+            auth,
+        );
+        assert_request_basics(
+            &requests[8],
+            "DELETE",
+            "/guilds/200/members/201/roles/300",
+            auth,
+        );
+        assert_request_basics(&requests[9], "POST", "/guilds/200/roles", auth);
+        assert_request_basics(&requests[10], "PATCH", "/guilds/200/roles/300", auth);
+        assert_request_basics(&requests[11], "DELETE", "/guilds/200/roles/300", auth);
+        assert_request_basics(&requests[12], "GET", "/guilds/200/members/201", auth);
+        assert_request_basics(&requests[13], "GET", "/guilds/200/roles", auth);
+        assert_request_basics(&requests[14], "PUT", "/applications/555/commands", auth);
+        assert_request_basics(&requests[15], "POST", "/applications/555/commands", auth);
+        assert_request_basics(&requests[16], "GET", "/applications/555/commands", auth);
+        assert_request_basics(&requests[17], "GET", "/gateway/bot", auth);
+        assert_request_basics(
+            &requests[18],
+            "PUT",
+            "/applications/555/guilds/200/commands",
+            auth,
+        );
+    }
+
+    #[tokio::test]
+    async fn client_webhook_and_followup_wrappers_hit_local_server() {
+        let responses = vec![
+            PlannedResponse::json(StatusCode::OK, json!({ "id": "900" })),
+            PlannedResponse::json(StatusCode::OK, json!([{ "id": "900" }])),
+            PlannedResponse::json(StatusCode::OK, json!({ "unexpected": true })),
+            PlannedResponse::json(
+                StatusCode::TOO_MANY_REQUESTS,
+                json!({ "retry_after": 0.0, "global": false }),
+            ),
+            PlannedResponse::json(StatusCode::OK, json!({ "id": "901" })),
+            PlannedResponse::json(StatusCode::OK, channel_payload("500", 1, None)),
+            PlannedResponse::empty(StatusCode::NO_CONTENT),
+            PlannedResponse::empty(StatusCode::NO_CONTENT),
+            PlannedResponse::json(StatusCode::OK, json!({ "id": "902" })),
+            PlannedResponse::json(StatusCode::OK, json!({ "id": "903" })),
+            PlannedResponse::json(StatusCode::OK, message_payload("904", "500", "followup")),
+            PlannedResponse::json(StatusCode::OK, message_payload("905", "500", "followup")),
+            PlannedResponse::json(StatusCode::OK, message_payload("906", "500", "original")),
+            PlannedResponse::json(StatusCode::OK, message_payload("907", "500", "original")),
+            PlannedResponse::json(StatusCode::OK, message_payload("908", "500", "edited")),
+            PlannedResponse::json(StatusCode::OK, message_payload("909", "500", "edited")),
+            PlannedResponse::empty(StatusCode::NO_CONTENT),
+            PlannedResponse::empty(StatusCode::NO_CONTENT),
+            PlannedResponse::json(
+                StatusCode::OK,
+                message_payload("910", "500", "followup-edit"),
+            ),
+            PlannedResponse::json(
+                StatusCode::OK,
+                message_payload("911", "500", "followup-edit"),
+            ),
+            PlannedResponse::empty(StatusCode::NO_CONTENT),
+            PlannedResponse::empty(StatusCode::NO_CONTENT),
+        ];
+        let (base_url, captured, server) = spawn_test_server(responses).await;
+        let client = RestClient::new_with_base_url("hook-token", 123, base_url);
+        let body = sample_message();
+
+        let webhook = client
+            .create_webhook(Snowflake::from("500"), &json!({ "name": "hook" }))
+            .await
+            .expect("create webhook");
+        assert_eq!(webhook["id"], json!("900"));
+
+        let webhooks = client
+            .get_channel_webhooks(Snowflake::from("500"))
+            .await
+            .expect("get channel webhooks array");
+        assert_eq!(webhooks.len(), 1);
+
+        let fallback = client
+            .get_channel_webhooks(Snowflake::from("500"))
+            .await
+            .expect("get channel webhooks fallback");
+        assert!(fallback.is_empty());
+
+        let executed = client
+            .execute_webhook(
+                Snowflake::from("777"),
+                "token",
+                &json!({ "content": "hook" }),
+            )
+            .await
+            .expect("execute webhook with retry");
+        assert_eq!(executed["id"], json!("901"));
+
+        let dm = client
+            .create_dm_channel_typed(&crate::model::CreateDmChannel {
+                recipient_id: Snowflake::from("42"),
+            })
+            .await
+            .expect("create dm channel");
+        assert_eq!(dm.id.as_str(), "500");
+
+        client
+            .create_interaction_response_typed(
+                Snowflake::from("777"),
+                "token",
+                &sample_interaction_response(),
+            )
+            .await
+            .expect("create interaction response typed");
+        client
+            .create_interaction_response_json(
+                Snowflake::from("778"),
+                "token",
+                &json!({ "type": 4, "data": { "content": "json" } }),
+            )
+            .await
+            .expect("create interaction response json");
+
+        assert_eq!(
+            client
+                .create_followup_message_json_with_application_id(
+                    "123",
+                    "token",
+                    &json!({ "content": "json" }),
+                )
+                .await
+                .expect("explicit followup json")["id"],
+            json!("902")
+        );
+        assert_eq!(
+            client
+                .create_followup_message_json("token", &json!({ "content": "implicit" }))
+                .await
+                .expect("implicit followup json")["id"],
+            json!("903")
+        );
+        assert_eq!(
+            client
+                .create_followup_message_with_application_id("123", "token", &body)
+                .await
+                .expect("explicit followup message")
+                .content,
+            "followup"
+        );
+        assert_eq!(
+            client
+                .create_followup_message("token", &body)
+                .await
+                .expect("implicit followup message")
+                .content,
+            "followup"
+        );
+        assert_eq!(
+            client
+                .get_original_interaction_response_with_application_id("123", "token")
+                .await
+                .expect("explicit original get")
+                .content,
+            "original"
+        );
+        assert_eq!(
+            client
+                .get_original_interaction_response("token")
+                .await
+                .expect("implicit original get")
+                .content,
+            "original"
+        );
+        assert_eq!(
+            client
+                .edit_original_interaction_response_with_application_id("123", "token", &body)
+                .await
+                .expect("explicit original edit")
+                .content,
+            "edited"
+        );
+        assert_eq!(
+            client
+                .edit_original_interaction_response("token", &body)
+                .await
+                .expect("implicit original edit")
+                .content,
+            "edited"
+        );
+        client
+            .delete_original_interaction_response_with_application_id("123", "token")
+            .await
+            .expect("explicit original delete");
+        client
+            .delete_original_interaction_response("token")
+            .await
+            .expect("implicit original delete");
+
+        assert_eq!(
+            client
+                .edit_followup_message_with_application_id("123", "token", "55", &body)
+                .await
+                .expect("explicit followup edit")
+                .content,
+            "followup-edit"
+        );
+        assert_eq!(
+            client
+                .edit_followup_message("token", "55", &body)
+                .await
+                .expect("implicit followup edit")
+                .content,
+            "followup-edit"
+        );
+        client
+            .delete_followup_message_with_application_id("123", "token", "55")
+            .await
+            .expect("explicit followup delete");
+        client
+            .delete_followup_message("token", "55")
+            .await
+            .expect("implicit followup delete");
+
+        server.await.expect("server finished");
+        let requests = captured.lock().expect("captured requests");
+        let bot_auth = Some("Bot hook-token");
+
+        assert_request_basics(&requests[0], "POST", "/channels/500/webhooks", bot_auth);
+        assert_request_basics(&requests[1], "GET", "/channels/500/webhooks", bot_auth);
+        assert_request_basics(&requests[2], "GET", "/channels/500/webhooks", bot_auth);
+        assert_request_basics(&requests[3], "POST", "/webhooks/777/token?wait=true", None);
+        assert_request_basics(&requests[4], "POST", "/webhooks/777/token?wait=true", None);
+        assert_request_basics(&requests[5], "POST", "/users/@me/channels", bot_auth);
+        assert_request_basics(
+            &requests[6],
+            "POST",
+            "/interactions/777/token/callback",
+            None,
+        );
+        assert_request_basics(
+            &requests[7],
+            "POST",
+            "/interactions/778/token/callback",
+            None,
+        );
+        assert_request_basics(&requests[8], "POST", "/webhooks/123/token", None);
+        assert_request_basics(&requests[9], "POST", "/webhooks/123/token", None);
+        assert_request_basics(&requests[10], "POST", "/webhooks/123/token", None);
+        assert_request_basics(&requests[11], "POST", "/webhooks/123/token", None);
+        assert_request_basics(
+            &requests[12],
+            "GET",
+            "/webhooks/123/token/messages/@original",
+            None,
+        );
+        assert_request_basics(
+            &requests[13],
+            "GET",
+            "/webhooks/123/token/messages/@original",
+            None,
+        );
+        assert_request_basics(
+            &requests[14],
+            "PATCH",
+            "/webhooks/123/token/messages/@original",
+            None,
+        );
+        assert_request_basics(
+            &requests[15],
+            "PATCH",
+            "/webhooks/123/token/messages/@original",
+            None,
+        );
+        assert_request_basics(
+            &requests[16],
+            "DELETE",
+            "/webhooks/123/token/messages/@original",
+            None,
+        );
+        assert_request_basics(
+            &requests[17],
+            "DELETE",
+            "/webhooks/123/token/messages/@original",
+            None,
+        );
+        assert_request_basics(
+            &requests[18],
+            "PATCH",
+            "/webhooks/123/token/messages/55",
+            None,
+        );
+        assert_request_basics(
+            &requests[19],
+            "PATCH",
+            "/webhooks/123/token/messages/55",
+            None,
+        );
+        assert_request_basics(
+            &requests[20],
+            "DELETE",
+            "/webhooks/123/token/messages/55",
+            None,
+        );
+        assert_request_basics(
+            &requests[21],
+            "DELETE",
+            "/webhooks/123/token/messages/55",
+            None,
+        );
+    }
+
+    #[tokio::test]
+    async fn request_surfaces_api_and_rate_limit_errors_from_local_server() {
+        let responses = vec![
+            PlannedResponse::text(
+                StatusCode::BAD_REQUEST,
+                r#"{"code":50035,"message":"bad payload"}"#,
+            ),
+            PlannedResponse::json(
+                StatusCode::TOO_MANY_REQUESTS,
+                json!({ "retry_after": 0.0, "global": false }),
+            ),
+            PlannedResponse::json(
+                StatusCode::TOO_MANY_REQUESTS,
+                json!({ "retry_after": 0.0, "global": false }),
+            ),
+        ];
+        let (base_url, captured, server) = spawn_test_server(responses).await;
+        let client = RestClient::new_with_base_url("err-token", 123, base_url);
+
+        match client
+            .request(
+                Method::POST,
+                "/channels/9/messages",
+                Some(&json!({ "content": "boom" })),
+            )
+            .await
+            .unwrap_err()
+        {
+            DiscordError::Api {
+                status,
+                code,
+                message,
+            } => {
+                assert_eq!(status, 400);
+                assert_eq!(code, Some(50035));
+                assert_eq!(message, "bad payload");
+            }
+            other => panic!("unexpected api error: {other:?}"),
+        }
+
+        match client
+            .execute_webhook(Snowflake::from("9"), "token", &json!({ "content": "boom" }))
+            .await
+            .unwrap_err()
+        {
+            DiscordError::RateLimit { route, retry_after } => {
+                assert_eq!(route, "POST:webhooks/9/token");
+                assert_eq!(retry_after, 0.0);
+            }
+            other => panic!("unexpected rate limit error: {other:?}"),
+        }
+
+        server.await.expect("server finished");
+        let requests = captured.lock().expect("captured requests");
+        assert_eq!(requests.len(), 3);
+        assert_request_basics(
+            &requests[0],
+            "POST",
+            "/channels/9/messages",
+            Some("Bot err-token"),
+        );
+        assert_request_basics(&requests[1], "POST", "/webhooks/9/token?wait=true", None);
+        assert_request_basics(&requests[2], "POST", "/webhooks/9/token?wait=true", None);
     }
 }

@@ -379,21 +379,31 @@ where
 
 #[cfg(test)]
 mod tests {
-    use async_trait::async_trait;
-    use axum::http::{HeaderMap, HeaderValue, StatusCode};
-    use ed25519_dalek::{Signer, SigningKey, VerifyingKey};
-    use serde_json::Value;
-
     use super::{
-        interaction_response_payload, try_interactions_endpoint, try_typed_interactions_endpoint,
-        verify_discord_request_signature_at_time, verify_signature_with_key_at_time,
-        InteractionHandler, InteractionResponse, TypedInteractionHandler,
+        current_unix_timestamp, decode_verifying_key, handle_interactions_request,
+        handle_typed_interactions_request, interaction_response_payload, try_interactions_endpoint,
+        try_typed_interactions_endpoint, verify_discord_request_signature_at_time,
+        verify_discord_signature, verify_signature_with_key_at_time, InteractionHandler,
+        InteractionResponse, InteractionsState, TypedInteractionHandler,
         SIGNATURE_TIMESTAMP_TOLERANCE_SECS,
     };
+    use crate::builders::ModalBuilder;
     use crate::model::ApplicationCommandOptionChoice;
     use crate::model::{Interaction, InteractionContextData};
     use crate::parsers::{InteractionContext, RawInteraction};
-
+    use async_trait::async_trait;
+    use axum::{
+        body::{to_bytes, Bytes},
+        extract::State,
+        http::{HeaderMap, HeaderValue, StatusCode},
+        response::IntoResponse,
+    };
+    use ed25519_dalek::{Signer, SigningKey, VerifyingKey};
+    use serde_json::{json, Value};
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc, Mutex,
+    };
     const TEST_NOW_UNIX_TIMESTAMP: i64 = 1_700_000_000;
 
     #[derive(Clone)]
@@ -432,6 +442,46 @@ mod tests {
             _interaction: Interaction,
         ) -> InteractionResponse {
             InteractionResponse::Raw(Value::Null)
+        }
+    }
+
+    #[derive(Clone, Default)]
+    struct RecordingRawHandler {
+        calls: Arc<AtomicUsize>,
+        records: Arc<Mutex<Vec<(InteractionContext, RawInteraction)>>>,
+        response: Value,
+    }
+
+    #[async_trait]
+    impl InteractionHandler for RecordingRawHandler {
+        async fn handle(
+            &self,
+            ctx: InteractionContext,
+            interaction: RawInteraction,
+        ) -> InteractionResponse {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            self.records.lock().unwrap().push((ctx, interaction));
+            InteractionResponse::Raw(self.response.clone())
+        }
+    }
+
+    #[derive(Clone, Default)]
+    struct RecordingTypedHandler {
+        calls: Arc<AtomicUsize>,
+        records: Arc<Mutex<Vec<(InteractionContextData, Interaction)>>>,
+        response: Value,
+    }
+
+    #[async_trait]
+    impl TypedInteractionHandler for RecordingTypedHandler {
+        async fn handle_typed(
+            &self,
+            ctx: InteractionContextData,
+            interaction: Interaction,
+        ) -> InteractionResponse {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            self.records.lock().unwrap().push((ctx, interaction));
+            InteractionResponse::Raw(self.response.clone())
         }
     }
 
@@ -493,6 +543,22 @@ mod tests {
             HeaderValue::from_str(timestamp).expect("timestamp header"),
         );
         headers
+    }
+
+    fn signed_headers_for_body(body: &[u8]) -> HeaderMap {
+        let timestamp = current_unix_timestamp().unwrap().to_string();
+        let (_, signature) = sign_request(&timestamp, body);
+        signed_headers(&signature, &timestamp)
+    }
+
+    async fn json_response(response: impl IntoResponse) -> Value {
+        let response = response.into_response();
+        serde_json::from_slice(
+            &to_bytes(response.into_body(), usize::MAX)
+                .await
+                .expect("response body"),
+        )
+        .expect("json body")
     }
 
     #[test]
@@ -643,5 +709,398 @@ mod tests {
             ),
             Err(StatusCode::UNAUTHORIZED)
         );
+    }
+
+    #[test]
+    fn verify_discord_signature_accepts_signed_requests() {
+        let body = br#"{"type":1}"#;
+        let timestamp = current_unix_timestamp().unwrap().to_string();
+        let (verifying_key, signature) = sign_request(&timestamp, body);
+
+        assert!(verify_discord_signature(
+            &hex::encode(verifying_key.as_bytes()),
+            &signature,
+            &timestamp,
+            body
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn decode_verifying_key_rejects_invalid_lengths() {
+        let error = decode_verifying_key("abcd").unwrap_err();
+        assert!(error.to_string().contains("32 bytes"));
+    }
+
+    #[test]
+    fn verify_discord_request_signature_accepts_valid_headers() {
+        let body = br#"{"type":1}"#;
+        let timestamp = TEST_NOW_UNIX_TIMESTAMP.to_string();
+        let (verifying_key, signature) = sign_request(&timestamp, body);
+        let headers = signed_headers(&signature, &timestamp);
+
+        assert_eq!(
+            verify_discord_request_signature_at_time(
+                &verifying_key,
+                &headers,
+                body,
+                TEST_NOW_UNIX_TIMESTAMP,
+            ),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn interaction_response_payload_covers_remaining_response_variants() {
+        assert_eq!(
+            interaction_response_payload(InteractionResponse::Pong),
+            json!({ "type": 1 })
+        );
+        assert_eq!(
+            interaction_response_payload(InteractionResponse::ChannelMessage(
+                json!({ "content": "hello" })
+            )),
+            json!({
+                "type": 4,
+                "data": { "content": "hello" }
+            })
+        );
+        assert_eq!(
+            interaction_response_payload(InteractionResponse::UpdateMessage(
+                json!({ "content": "updated" })
+            )),
+            json!({
+                "type": 7,
+                "data": { "content": "updated" }
+            })
+        );
+        assert_eq!(
+            interaction_response_payload(InteractionResponse::Modal(ModalBuilder::new(
+                "feedback", "Feedback"
+            )))["type"],
+            json!(9)
+        );
+        assert_eq!(
+            interaction_response_payload(InteractionResponse::Raw(json!({ "type": 99 }))),
+            json!({ "type": 99 })
+        );
+    }
+
+    #[tokio::test]
+    async fn raw_handler_rejects_bad_signature_json_type_context_and_parse_errors() {
+        let handler = RecordingRawHandler {
+            response: json!({ "type": 4 }),
+            ..Default::default()
+        };
+        let verifying_key = test_signing_key().verifying_key();
+
+        let unauthorized = handle_interactions_request(
+            State(InteractionsState {
+                verifying_key,
+                handler: handler.clone(),
+            }),
+            HeaderMap::new(),
+            Bytes::from_static(br#"{"type":1}"#),
+        )
+        .await
+        .into_response();
+        assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+
+        let bad_json_body = br#"{"type":"#.to_vec();
+        let bad_json = handle_interactions_request(
+            State(InteractionsState {
+                verifying_key,
+                handler: handler.clone(),
+            }),
+            signed_headers_for_body(&bad_json_body),
+            Bytes::from(bad_json_body),
+        )
+        .await;
+        assert_eq!(
+            json_response(bad_json).await["error"].as_str().is_some(),
+            true
+        );
+
+        let bad_type_body = serde_json::to_vec(&json!({
+            "id": "1",
+            "application_id": "2",
+            "token": "token",
+            "type": "bad"
+        }))
+        .unwrap();
+        let bad_type = handle_interactions_request(
+            State(InteractionsState {
+                verifying_key,
+                handler: handler.clone(),
+            }),
+            signed_headers_for_body(&bad_type_body),
+            Bytes::from(bad_type_body),
+        )
+        .await;
+        assert_eq!(
+            json_response(bad_type).await,
+            json!({ "error": "missing or invalid interaction.type" })
+        );
+
+        let bad_context_body = serde_json::to_vec(&json!({
+            "application_id": "2",
+            "token": "token",
+            "type": 2,
+            "data": {}
+        }))
+        .unwrap();
+        let bad_context = handle_interactions_request(
+            State(InteractionsState {
+                verifying_key,
+                handler: handler.clone(),
+            }),
+            signed_headers_for_body(&bad_context_body),
+            Bytes::from(bad_context_body),
+        )
+        .await;
+        assert!(json_response(bad_context)
+            .await
+            .get("error")
+            .and_then(Value::as_str)
+            .unwrap()
+            .contains("missing or invalid interaction.id"));
+
+        let bad_parse_body = serde_json::to_vec(&json!({
+            "id": "1",
+            "application_id": "2",
+            "token": "token",
+            "type": 9,
+            "data": {}
+        }))
+        .unwrap();
+        let bad_parse = handle_interactions_request(
+            State(InteractionsState {
+                verifying_key,
+                handler: handler.clone(),
+            }),
+            signed_headers_for_body(&bad_parse_body),
+            Bytes::from(bad_parse_body),
+        )
+        .await;
+        assert!(json_response(bad_parse)
+            .await
+            .get("error")
+            .and_then(Value::as_str)
+            .unwrap()
+            .contains("unsupported interaction type"));
+
+        assert_eq!(handler.calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn raw_handler_short_circuits_ping_and_dispatches_commands() {
+        let handler = RecordingRawHandler {
+            response: json!({
+                "type": 7,
+                "data": { "content": "raw ok" }
+            }),
+            ..Default::default()
+        };
+        let verifying_key = test_signing_key().verifying_key();
+
+        let ping_body = serde_json::to_vec(&json!({
+            "id": "1",
+            "application_id": "2",
+            "token": "token",
+            "type": 1
+        }))
+        .unwrap();
+        let ping = handle_interactions_request(
+            State(InteractionsState {
+                verifying_key,
+                handler: handler.clone(),
+            }),
+            signed_headers_for_body(&ping_body),
+            Bytes::from(ping_body),
+        )
+        .await;
+        assert_eq!(json_response(ping).await, json!({ "type": 1 }));
+        assert_eq!(handler.calls.load(Ordering::SeqCst), 0);
+
+        let command_body = serde_json::to_vec(&json!({
+            "id": "100",
+            "application_id": "200",
+            "token": "interaction_token",
+            "guild_id": "300",
+            "channel_id": "400",
+            "member": {
+                "user": {
+                    "id": "500",
+                    "username": "tester"
+                }
+            },
+            "type": 2,
+            "data": {
+                "id": "600",
+                "name": "ticket",
+                "type": 1,
+                "options": []
+            }
+        }))
+        .unwrap();
+        let command = handle_interactions_request(
+            State(InteractionsState {
+                verifying_key,
+                handler: handler.clone(),
+            }),
+            signed_headers_for_body(&command_body),
+            Bytes::from(command_body),
+        )
+        .await;
+        assert_eq!(
+            json_response(command).await,
+            json!({
+                "type": 7,
+                "data": { "content": "raw ok" }
+            })
+        );
+        assert_eq!(handler.calls.load(Ordering::SeqCst), 1);
+        let records = handler.records.lock().unwrap();
+        let (ctx, interaction) = &records[0];
+        assert_eq!(ctx.id, "100");
+        assert_eq!(ctx.application_id, "200");
+        assert_eq!(ctx.user_id.as_deref(), Some("500"));
+        assert!(matches!(interaction, RawInteraction::Command { .. }));
+    }
+
+    #[tokio::test]
+    async fn typed_handler_short_circuits_ping_and_reports_parse_errors() {
+        let handler = RecordingTypedHandler {
+            response: json!({
+                "type": 4,
+                "data": { "content": "typed ok" }
+            }),
+            ..Default::default()
+        };
+        let verifying_key = test_signing_key().verifying_key();
+
+        let ping_body = serde_json::to_vec(&json!({
+            "id": "10",
+            "application_id": "20",
+            "token": "token",
+            "type": 1
+        }))
+        .unwrap();
+        let ping = handle_typed_interactions_request(
+            State(InteractionsState {
+                verifying_key,
+                handler: handler.clone(),
+            }),
+            signed_headers_for_body(&ping_body),
+            Bytes::from(ping_body),
+        )
+        .await;
+        assert_eq!(json_response(ping).await, json!({ "type": 1 }));
+        assert_eq!(handler.calls.load(Ordering::SeqCst), 0);
+
+        let parse_error_body = serde_json::to_vec(&json!({
+            "id": "12",
+            "application_id": "23",
+            "token": "typed_token",
+            "type": 3,
+            "data": {
+                "component_type": 2
+            }
+        }))
+        .unwrap();
+        let parse_error = handle_typed_interactions_request(
+            State(InteractionsState {
+                verifying_key,
+                handler: handler.clone(),
+            }),
+            signed_headers_for_body(&parse_error_body),
+            Bytes::from(parse_error_body),
+        )
+        .await;
+        assert!(json_response(parse_error)
+            .await
+            .get("error")
+            .and_then(Value::as_str)
+            .unwrap()
+            .contains("missing or invalid component_data.custom_id"));
+    }
+
+    #[tokio::test]
+    async fn typed_handler_dispatches_component_and_unknown_interactions() {
+        let handler = RecordingTypedHandler {
+            response: json!({
+                "type": 4,
+                "data": { "content": "typed ok" }
+            }),
+            ..Default::default()
+        };
+        let verifying_key = test_signing_key().verifying_key();
+
+        let component_body = serde_json::to_vec(&json!({
+            "id": "11",
+            "application_id": "22",
+            "token": "typed_token",
+            "channel_id": "33",
+            "user": {
+                "id": "44",
+                "username": "typed-user"
+            },
+            "type": 3,
+            "data": {
+                "custom_id": "approve",
+                "component_type": 2,
+                "values": ["yes"]
+            }
+        }))
+        .unwrap();
+        let component = handle_typed_interactions_request(
+            State(InteractionsState {
+                verifying_key,
+                handler: handler.clone(),
+            }),
+            signed_headers_for_body(&component_body),
+            Bytes::from(component_body),
+        )
+        .await;
+        assert_eq!(
+            json_response(component).await,
+            json!({
+                "type": 4,
+                "data": { "content": "typed ok" }
+            })
+        );
+
+        let unknown_body = serde_json::to_vec(&json!({
+            "id": "13",
+            "application_id": "24",
+            "token": "typed_token",
+            "guild_id": "35",
+            "type": 42,
+            "data": {
+                "opaque": true
+            }
+        }))
+        .unwrap();
+        let unknown = handle_typed_interactions_request(
+            State(InteractionsState {
+                verifying_key,
+                handler: handler.clone(),
+            }),
+            signed_headers_for_body(&unknown_body),
+            Bytes::from(unknown_body),
+        )
+        .await;
+        assert_eq!(
+            json_response(unknown).await,
+            json!({
+                "type": 4,
+                "data": { "content": "typed ok" }
+            })
+        );
+
+        let records = handler.records.lock().unwrap();
+        assert_eq!(records.len(), 2);
+        assert!(matches!(records[0].1, Interaction::Component(_)));
+        assert!(matches!(records[1].1, Interaction::Unknown { .. }));
     }
 }

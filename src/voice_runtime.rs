@@ -408,17 +408,166 @@ mod tests {
     use futures_util::{SinkExt, StreamExt};
     use serde_json::Value;
     use tokio::net::{TcpListener, UdpSocket};
-    use tokio::sync::oneshot;
+    use tokio::sync::{oneshot, watch};
+    use tokio::time::{timeout, Duration};
     use tokio_tungstenite::{accept_async, tungstenite::Message as WsMessage};
 
-    use super::{connect, VoiceRuntimeConfig};
-    use crate::voice::{VoiceSpeakingFlags, VoiceUdpDiscoveryPacket};
+    use super::{
+        build_heartbeat_payload, build_identify_payload, connect, read_hello_interval,
+        select_encryption_mode, update_state, VoiceRuntimeConfig, VoiceRuntimeState,
+        VoiceSessionDescription,
+    };
+    use crate::voice::{
+        VoiceEncryptionMode, VoiceGatewayCommand, VoiceGatewayReady, VoiceSpeakingFlags,
+        VoiceUdpDiscoveryPacket,
+    };
 
     #[test]
     fn voice_runtime_config_normalizes_voice_gateway_url() {
         let config =
             VoiceRuntimeConfig::new("1", "2", "session", "token", "voice.discord.media:443");
         assert_eq!(config.websocket_url(), "wss://voice.discord.media:443/?v=8");
+    }
+
+    #[test]
+    fn voice_runtime_config_clamps_version_and_extends_existing_query() {
+        let config = VoiceRuntimeConfig::new(
+            "1",
+            "2",
+            "session",
+            "token",
+            "ws://127.0.0.1/socket?encoding=json",
+        )
+        .gateway_version(2)
+        .preferred_mode(VoiceEncryptionMode::aead_xchacha20_poly1305_rtpsize())
+        .max_dave_protocol_version(3);
+
+        assert_eq!(
+            config.websocket_url(),
+            "ws://127.0.0.1/socket?encoding=json&v=4"
+        );
+        assert_eq!(
+            config.preferred_mode,
+            Some(VoiceEncryptionMode::aead_xchacha20_poly1305_rtpsize())
+        );
+        assert_eq!(config.max_dave_protocol_version, Some(3));
+    }
+
+    #[test]
+    fn voice_runtime_helper_builders_cover_optional_and_fallback_fields() {
+        let config = VoiceRuntimeConfig {
+            max_dave_protocol_version: None,
+            ..VoiceRuntimeConfig::new("1", "2", "session", "token", "voice.discord.media")
+        };
+        assert_eq!(
+            build_identify_payload(&config),
+            serde_json::json!({
+                "op": 0,
+                "d": {
+                    "server_id": "1",
+                    "user_id": "2",
+                    "session_id": "session",
+                    "token": "token",
+                }
+            })
+        );
+        assert_eq!(
+            build_heartbeat_payload(55, None),
+            serde_json::json!({
+                "op": 3,
+                "d": {
+                    "t": 55,
+                    "seq_ack": -1,
+                }
+            })
+        );
+        assert_eq!(
+            build_heartbeat_payload(55, Some(7)),
+            serde_json::json!({
+                "op": 3,
+                "d": {
+                    "t": 55,
+                    "seq_ack": 7,
+                }
+            })
+        );
+    }
+
+    #[test]
+    fn voice_runtime_read_hello_interval_and_mode_selection_handle_edge_cases() {
+        assert_eq!(
+            read_hello_interval(&serde_json::json!({
+                "d": { "heartbeat_interval": 250 }
+            }))
+            .unwrap(),
+            250
+        );
+        assert!(read_hello_interval(&serde_json::json!({ "d": {} }))
+            .unwrap_err()
+            .to_string()
+            .contains("missing voice hello heartbeat interval"));
+
+        let preferred = VoiceEncryptionMode::aead_xchacha20_poly1305_rtpsize();
+        let fallback = VoiceEncryptionMode::aead_aes256_gcm_rtpsize();
+        let ready = VoiceGatewayReady::new(42, "127.0.0.1", 5000)
+            .mode(fallback.clone())
+            .mode(preferred.clone());
+        let config = VoiceRuntimeConfig::new("1", "2", "session", "token", "voice.discord.media")
+            .preferred_mode(preferred.clone());
+        assert_eq!(select_encryption_mode(&config, &ready).unwrap(), preferred);
+
+        let fallback_only = VoiceGatewayReady::new(42, "127.0.0.1", 5000).mode(fallback.clone());
+        let config_without_match =
+            VoiceRuntimeConfig::new("1", "2", "session", "token", "voice.discord.media")
+                .preferred_mode(VoiceEncryptionMode::aead_xchacha20_poly1305_rtpsize());
+        assert_eq!(
+            select_encryption_mode(&config_without_match, &fallback_only).unwrap(),
+            fallback
+        );
+
+        let empty_ready = VoiceGatewayReady::new(42, "127.0.0.1", 5000);
+        assert!(select_encryption_mode(
+            &VoiceRuntimeConfig::new("1", "2", "session", "token", "voice.discord.media"),
+            &empty_ready
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("did not include encryption modes"));
+    }
+
+    #[test]
+    fn voice_runtime_update_state_publishes_changes_and_reports_closed_receivers() {
+        let initial_state = VoiceRuntimeState {
+            config: VoiceRuntimeConfig::new("1", "2", "session", "token", "voice.discord.media"),
+            heartbeat_interval_ms: 250,
+            last_sequence: Some(3),
+            ready: VoiceGatewayReady::new(42, "127.0.0.1", 5000),
+            discovery: VoiceUdpDiscoveryPacket {
+                ssrc: 42,
+                address: "203.0.113.7".to_string(),
+                port: 5000,
+            },
+            selected_mode: VoiceEncryptionMode::aead_aes256_gcm_rtpsize(),
+            session_description: None,
+            resumed: false,
+        };
+        let (state_tx, state_rx) = watch::channel(initial_state.clone());
+        update_state(&state_tx, |state| {
+            state.last_sequence = Some(9);
+            state.resumed = true;
+        })
+        .unwrap();
+
+        let updated = state_rx.borrow().clone();
+        assert_eq!(updated.last_sequence, Some(9));
+        assert!(updated.resumed);
+
+        let (closed_tx, closed_rx) = watch::channel(initial_state);
+        drop(closed_rx);
+        assert!(update_state(&closed_tx, |state| state.resumed = true)
+            .unwrap_err()
+            .to_string()
+            .contains("failed to publish voice runtime state"));
     }
 
     #[tokio::test]
@@ -535,6 +684,202 @@ mod tests {
             .set_speaking(VoiceSpeakingFlags::MICROPHONE, 0)
             .unwrap();
         speaking_rx.await.unwrap();
+        handle.close().await.unwrap();
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn voice_runtime_loop_updates_state_and_sends_custom_commands() {
+        let udp_listener = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let udp_port = udp_listener.local_addr().unwrap().port();
+
+        let tcp_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let ws_port = tcp_listener.local_addr().unwrap().port();
+        let (heartbeat_tx, heartbeat_rx) = oneshot::channel();
+
+        let server = tokio::spawn(async move {
+            let mut heartbeat_tx = Some(heartbeat_tx);
+            let (tcp_stream, _) = tcp_listener.accept().await.unwrap();
+            let mut ws = accept_async(tcp_stream).await.unwrap();
+
+            ws.send(WsMessage::Text(
+                serde_json::json!({
+                    "op": 8,
+                    "d": { "heartbeat_interval": 5_000 },
+                    "seq": 3
+                })
+                .to_string()
+                .into(),
+            ))
+            .await
+            .unwrap();
+
+            let identify = ws.next().await.unwrap().unwrap().into_text().unwrap();
+            let identify_payload: Value = serde_json::from_str(&identify).unwrap();
+            assert_eq!(identify_payload["d"]["max_dave_protocol_version"], 1);
+
+            ws.send(WsMessage::Text(
+                serde_json::json!({
+                    "op": 2,
+                    "d": {
+                        "ssrc": 42,
+                        "ip": "127.0.0.1",
+                        "port": udp_port,
+                        "modes": [
+                            "aead_aes256_gcm_rtpsize",
+                            "aead_xchacha20_poly1305_rtpsize"
+                        ]
+                    },
+                    "seq": 7
+                })
+                .to_string()
+                .into(),
+            ))
+            .await
+            .unwrap();
+
+            let mut discovery_buffer = [0_u8; VoiceUdpDiscoveryPacket::LEN];
+            let (received, remote_addr) =
+                udp_listener.recv_from(&mut discovery_buffer).await.unwrap();
+            assert_eq!(received, VoiceUdpDiscoveryPacket::LEN);
+
+            let mut response = VoiceUdpDiscoveryPacket::request(42);
+            response[..2].copy_from_slice(&VoiceUdpDiscoveryPacket::RESPONSE_TYPE.to_be_bytes());
+            response[2..4].copy_from_slice(&VoiceUdpDiscoveryPacket::BODY_LEN.to_be_bytes());
+            let address = b"203.0.113.7";
+            response[8..8 + address.len()].copy_from_slice(address);
+            response[72..74].copy_from_slice(&remote_addr.port().to_be_bytes());
+            udp_listener.send_to(&response, remote_addr).await.unwrap();
+
+            let select_protocol = ws.next().await.unwrap().unwrap().into_text().unwrap();
+            let select_protocol_payload: Value = serde_json::from_str(&select_protocol).unwrap();
+            assert_eq!(
+                select_protocol_payload["d"]["data"]["mode"],
+                serde_json::json!("aead_xchacha20_poly1305_rtpsize")
+            );
+
+            ws.send(WsMessage::Text(
+                serde_json::json!({
+                    "op": 4,
+                    "d": {
+                        "mode": "aead_xchacha20_poly1305_rtpsize",
+                        "secret_key": [1, 2, 3, 4]
+                    },
+                    "seq": 9
+                })
+                .to_string()
+                .into(),
+            ))
+            .await
+            .unwrap();
+
+            ws.send(WsMessage::Text(
+                serde_json::json!({
+                    "op": 4,
+                    "d": {
+                        "mode": "aead_xchacha20_poly1305_rtpsize",
+                        "secret_key": [9, 9],
+                        "audio_codec": "opus"
+                    },
+                    "seq": 11
+                })
+                .to_string()
+                .into(),
+            ))
+            .await
+            .unwrap();
+            ws.send(WsMessage::Text(
+                serde_json::json!({
+                    "op": 9,
+                    "seq": 12
+                })
+                .to_string()
+                .into(),
+            ))
+            .await
+            .unwrap();
+            ws.send(WsMessage::Binary(vec![0, 25].into()))
+                .await
+                .unwrap();
+
+            loop {
+                let message = ws.next().await.unwrap().unwrap();
+                match message {
+                    WsMessage::Text(text) => {
+                        let payload: Value = serde_json::from_str(&text).unwrap();
+                        if payload["op"] == serde_json::json!(3)
+                            && payload["d"] == serde_json::json!(55)
+                        {
+                            if let Some(heartbeat_tx) = heartbeat_tx.take() {
+                                let _ = heartbeat_tx.send(());
+                            }
+                        }
+                    }
+                    WsMessage::Close(frame) => {
+                        let _ = ws.send(WsMessage::Close(frame)).await;
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+        });
+
+        let handle = connect(
+            VoiceRuntimeConfig::new(
+                "1",
+                "2",
+                "session",
+                "token",
+                format!("ws://127.0.0.1:{ws_port}"),
+            )
+            .preferred_mode(VoiceEncryptionMode::aead_xchacha20_poly1305_rtpsize()),
+        )
+        .await
+        .unwrap();
+
+        let mut state_rx = handle.subscribe();
+        handle
+            .send(VoiceGatewayCommand::Heartbeat { nonce: 55 })
+            .unwrap();
+        heartbeat_rx.await.unwrap();
+
+        timeout(Duration::from_secs(1), async {
+            loop {
+                let state = state_rx.borrow().clone();
+                if state.resumed
+                    && state.last_sequence == Some(25)
+                    && state
+                        .session_description
+                        .as_ref()
+                        .map(|description| description.secret_key.as_slice() == [9, 9])
+                        == Some(true)
+                {
+                    break;
+                }
+
+                state_rx.changed().await.unwrap();
+            }
+        })
+        .await
+        .unwrap();
+
+        let state = handle.state();
+        assert_eq!(
+            state.selected_mode,
+            VoiceEncryptionMode::aead_xchacha20_poly1305_rtpsize()
+        );
+        assert_eq!(state.last_sequence, Some(25));
+        assert!(state.resumed);
+        assert_eq!(
+            state.session_description,
+            Some(VoiceSessionDescription {
+                mode: VoiceEncryptionMode::aead_xchacha20_poly1305_rtpsize(),
+                secret_key: vec![9, 9],
+                audio_codec: Some("opus".to_string()),
+                dave_protocol_version: None,
+            })
+        );
+
         handle.close().await.unwrap();
         server.await.unwrap();
     }

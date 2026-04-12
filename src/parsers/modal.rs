@@ -316,4 +316,210 @@ mod tests {
             Some(&["789".to_string()][..])
         );
     }
+
+    #[test]
+    fn parse_modal_submission_covers_select_radio_checkbox_and_lookup_helpers() {
+        let payload = json!({
+            "custom_id": "settings_modal",
+            "components": [
+                {
+                    "type": 18,
+                    "label": "Roles",
+                    "component": {
+                        "type": 6,
+                        "custom_id": "roles",
+                        "values": ["mod", "admin"]
+                    }
+                },
+                {
+                    "type": 18,
+                    "label": "Radio",
+                    "component": {
+                        "type": 21,
+                        "custom_id": "visibility",
+                        "value": "public"
+                    }
+                },
+                {
+                    "type": 18,
+                    "label": "Checkbox",
+                    "component": {
+                        "type": 23,
+                        "custom_id": "enabled",
+                        "checked": true
+                    }
+                }
+            ]
+        });
+
+        let submission = parse_modal_submission(&payload).unwrap();
+        assert_eq!(
+            submission.get_select_values("roles"),
+            Some(&["mod".to_string(), "admin".to_string()][..])
+        );
+        assert_eq!(submission.get_radio_value("visibility"), Some("public"));
+        assert_eq!(submission.get_text("roles"), None);
+        assert_eq!(
+            submission.components,
+            vec![
+                V2ModalComponent::RoleSelect {
+                    custom_id: "roles".to_string(),
+                    values: vec!["mod".to_string(), "admin".to_string()],
+                },
+                V2ModalComponent::RadioGroup {
+                    custom_id: "visibility".to_string(),
+                    value: "public".to_string(),
+                },
+                V2ModalComponent::Checkbox {
+                    custom_id: "enabled".to_string(),
+                    checked: true,
+                }
+            ]
+        );
+    }
+
+    #[test]
+    fn parse_modal_submission_ignores_unknown_leaf_components_and_reports_missing_label_component()
+    {
+        let payload = json!({
+            "custom_id": "mixed_modal",
+            "components": [
+                {
+                    "type": 18,
+                    "label": "Known",
+                    "component": {
+                        "type": 4,
+                        "custom_id": "summary",
+                        "value": "details"
+                    }
+                },
+                {
+                    "type": 255,
+                    "custom_id": "unknown"
+                }
+            ]
+        });
+
+        let submission = parse_modal_submission(&payload).unwrap();
+        assert_eq!(submission.get_text("summary"), Some("details"));
+        assert_eq!(submission.components.len(), 1);
+
+        let error = parse_modal_submission(&json!({
+            "custom_id": "broken",
+            "components": [{
+                "type": 18,
+                "label": "Missing nested component"
+            }]
+        }))
+        .unwrap_err();
+        assert!(error.to_string().contains("missing label.component"));
+    }
+
+    #[test]
+    fn parse_modal_submission_covers_remaining_select_types_and_accessor_fallbacks() {
+        let payload = json!({
+            "custom_id": "picker_modal",
+            "components": [
+                {
+                    "type": 1,
+                    "components": [
+                        {
+                            "type": 3,
+                            "custom_id": "strings",
+                            "values": ["alpha", "beta"]
+                        },
+                        {
+                            "type": 5,
+                            "custom_id": "users",
+                            "values": ["100"]
+                        },
+                        {
+                            "type": 8,
+                            "custom_id": "channels",
+                            "values": ["200"]
+                        },
+                        {
+                            "type": 7,
+                            "custom_id": "mentionables",
+                            "values": ["300", "400"]
+                        },
+                        {
+                            "type": 22,
+                            "custom_id": "checks",
+                            "values": ["x", "y"]
+                        },
+                        {
+                            "type": "invalid"
+                        }
+                    ]
+                }
+            ]
+        });
+
+        let submission = parse_modal_submission(&payload).unwrap();
+        assert_eq!(
+            submission.get_select_values("strings"),
+            Some(&["alpha".to_string(), "beta".to_string()][..])
+        );
+        assert_eq!(
+            submission.get_select_values("users"),
+            Some(&["100".to_string()][..])
+        );
+        assert_eq!(
+            submission.get_select_values("channels"),
+            Some(&["200".to_string()][..])
+        );
+        assert_eq!(
+            submission.get_select_values("mentionables"),
+            Some(&["300".to_string(), "400".to_string()][..])
+        );
+        assert_eq!(
+            submission.get_select_values("checks"),
+            Some(&["x".to_string(), "y".to_string()][..])
+        );
+        assert_eq!(submission.get_text("strings"), None);
+        assert_eq!(submission.get_radio_value("strings"), None);
+        assert_eq!(submission.get_file_values("strings"), None);
+        assert_eq!(submission.get_select_values("missing"), None);
+        assert_eq!(submission.components.len(), 5);
+    }
+
+    #[test]
+    fn parse_modal_submission_reports_leaf_validation_errors() {
+        let error = parse_modal_submission(&json!({
+            "custom_id": "broken_text",
+            "components": [{
+                "type": 4,
+                "custom_id": "summary"
+            }]
+        }))
+        .unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("missing or invalid text_input.value"));
+
+        let error = parse_modal_submission(&json!({
+            "custom_id": "broken_checkbox",
+            "components": [{
+                "type": 23,
+                "custom_id": "enabled",
+                "checked": "yes"
+            }]
+        }))
+        .unwrap_err();
+        assert!(error.to_string().contains("checkbox.checked"));
+
+        let error = parse_modal_submission(&json!({
+            "custom_id": "broken_select",
+            "components": [{
+                "type": 3,
+                "custom_id": "strings",
+                "values": [{}]
+            }]
+        }))
+        .unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("string_select.values must contain strings"));
+    }
 }

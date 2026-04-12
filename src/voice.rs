@@ -867,9 +867,10 @@ impl VoiceManager {
 #[cfg(test)]
 mod tests {
     use super::{
-        AudioTrack, VoiceConnectionConfig, VoiceConnectionStatus, VoiceEncryptionMode,
-        VoiceGatewayCommand, VoiceManager, VoiceSpeakingFlags, VoiceTransportState,
-        VoiceUdpDiscoveryPacket,
+        AudioTrack, VoiceConnectionConfig, VoiceConnectionState, VoiceConnectionStatus,
+        VoiceEncryptionMode, VoiceGatewayCommand, VoiceGatewayHello, VoiceGatewayReady,
+        VoiceManager, VoiceSelectProtocolCommand, VoiceSpeakingCommand, VoiceSpeakingFlags,
+        VoiceTransportProtocol, VoiceTransportState, VoiceUdpDiscoveryPacket,
     };
     use crate::model::{Snowflake, VoiceServerUpdate, VoiceState};
 
@@ -940,6 +941,76 @@ mod tests {
         let payload = VoiceGatewayCommand::Heartbeat { nonce: 99 }.payload();
         assert_eq!(payload["op"], serde_json::json!(3));
         assert_eq!(payload["d"], serde_json::json!(99));
+    }
+
+    #[test]
+    fn voice_gateway_command_payloads_cover_all_variants() {
+        let commands = [
+            (
+                VoiceGatewayCommand::Identify {
+                    server_id: Snowflake::from("1"),
+                    user_id: Snowflake::from("2"),
+                    session_id: "session".to_string(),
+                    token: "token".to_string(),
+                },
+                0,
+                serde_json::json!({
+                    "server_id": "1",
+                    "user_id": "2",
+                    "session_id": "session",
+                    "token": "token",
+                }),
+            ),
+            (
+                VoiceGatewayCommand::Resume {
+                    server_id: Snowflake::from("1"),
+                    session_id: "session".to_string(),
+                    token: "token".to_string(),
+                },
+                7,
+                serde_json::json!({
+                    "server_id": "1",
+                    "session_id": "session",
+                    "token": "token",
+                }),
+            ),
+            (
+                VoiceGatewayCommand::SelectProtocol(VoiceSelectProtocolCommand::udp(
+                    "203.0.113.7",
+                    5000,
+                    VoiceEncryptionMode::aead_aes256_gcm_rtpsize(),
+                )),
+                1,
+                serde_json::json!({
+                    "protocol": "udp",
+                    "data": {
+                        "address": "203.0.113.7",
+                        "port": 5000,
+                        "mode": "aead_aes256_gcm_rtpsize",
+                    }
+                }),
+            ),
+            (
+                VoiceGatewayCommand::Speaking(
+                    VoiceSpeakingCommand::new(42)
+                        .speaking(VoiceSpeakingFlags::PRIORITY)
+                        .delay(5),
+                ),
+                5,
+                serde_json::json!({
+                    "speaking": VoiceSpeakingFlags::PRIORITY.bits(),
+                    "delay": 5,
+                    "ssrc": 42,
+                }),
+            ),
+        ];
+
+        for (command, opcode, data) in commands {
+            let payload = command.payload();
+            assert_eq!(command.opcode().code(), opcode);
+            assert_eq!(payload["op"], serde_json::json!(opcode));
+            assert_eq!(payload["d"], data);
+        }
     }
 
     #[test]
@@ -1072,5 +1143,240 @@ mod tests {
         assert_eq!(tracked.token, None);
         assert_eq!(tracked.transport, None);
         assert_eq!(tracked.speaking, None);
+    }
+
+    #[test]
+    fn voice_udp_discovery_packet_rejects_invalid_payloads() {
+        let short_packet = [0_u8; VoiceUdpDiscoveryPacket::LEN - 1];
+        let short_error = VoiceUdpDiscoveryPacket::decode(&short_packet).unwrap_err();
+        assert!(short_error
+            .to_string()
+            .contains("voice discovery packet must be at least"));
+
+        let mut wrong_type = VoiceUdpDiscoveryPacket::request(7);
+        wrong_type[..2].copy_from_slice(&9_u16.to_be_bytes());
+        let wrong_type_error = VoiceUdpDiscoveryPacket::decode(&wrong_type).unwrap_err();
+        assert!(wrong_type_error
+            .to_string()
+            .contains("unexpected voice discovery packet type 9"));
+
+        let mut wrong_length = VoiceUdpDiscoveryPacket::request(7);
+        wrong_length[..2].copy_from_slice(&VoiceUdpDiscoveryPacket::RESPONSE_TYPE.to_be_bytes());
+        wrong_length[2..4].copy_from_slice(&12_u16.to_be_bytes());
+        let wrong_length_error = VoiceUdpDiscoveryPacket::decode(&wrong_length).unwrap_err();
+        assert!(wrong_length_error
+            .to_string()
+            .contains("unexpected voice discovery packet length 12"));
+
+        let mut invalid_address = VoiceUdpDiscoveryPacket::request(7);
+        invalid_address[..2].copy_from_slice(&VoiceUdpDiscoveryPacket::RESPONSE_TYPE.to_be_bytes());
+        invalid_address[2..4].copy_from_slice(&VoiceUdpDiscoveryPacket::BODY_LEN.to_be_bytes());
+        invalid_address[8] = 0xff;
+        let invalid_address_error = VoiceUdpDiscoveryPacket::decode(&invalid_address).unwrap_err();
+        assert!(invalid_address_error
+            .to_string()
+            .contains("invalid voice discovery ip"));
+    }
+
+    #[test]
+    fn voice_connection_state_stays_connecting_until_all_runtime_fields_exist() {
+        let config = VoiceConnectionConfig::new("1", "2").endpoint("voice.discord.media");
+        let mut state = VoiceConnectionState::from_config(config);
+        assert_eq!(state.status, VoiceConnectionStatus::Connecting);
+        assert!(!state.is_ready());
+
+        state.set_transport(VoiceTransportState::udp(
+            "127.0.0.1",
+            5000,
+            VoiceEncryptionMode::aead_aes256_gcm_rtpsize(),
+            42,
+        ));
+        state.set_speaking(super::VoiceSpeakingState::new(
+            VoiceSpeakingFlags::MICROPHONE,
+            0,
+        ));
+
+        state.apply_server_update(&VoiceServerUpdate {
+            guild_id: Snowflake::from("1"),
+            token: "token".to_string(),
+            endpoint: Some("voice-next.discord.media".to_string()),
+        });
+        assert_eq!(state.status, VoiceConnectionStatus::Connecting);
+        assert_eq!(state.endpoint.as_deref(), Some("voice-next.discord.media"));
+        assert_eq!(state.token.as_deref(), Some("token"));
+        assert_eq!(state.transport, None);
+        assert_eq!(state.speaking, None);
+
+        state.apply_voice_state(&VoiceState {
+            guild_id: Some(Snowflake::from("1")),
+            channel_id: Some(Snowflake::from("2")),
+            session_id: Some("session".to_string()),
+            self_mute: true,
+            self_deaf: false,
+            ..VoiceState::default()
+        });
+        assert!(state.is_ready());
+        assert_eq!(state.status, VoiceConnectionStatus::Connected);
+        assert_eq!(state.session_id.as_deref(), Some("session"));
+        assert!(state.self_mute);
+        assert!(!state.self_deaf);
+    }
+
+    #[test]
+    fn voice_manager_handles_missing_updates_and_disconnect_cleans_state() {
+        let mut manager = VoiceManager::new();
+        assert_eq!(manager.update_voice_state(&VoiceState::default()), None);
+        assert_eq!(
+            manager.update_voice_state(&VoiceState {
+                guild_id: Some(Snowflake::from("1")),
+                ..VoiceState::default()
+            }),
+            None
+        );
+
+        manager.connect(
+            VoiceConnectionConfig::new("1", "2")
+                .session_id("session")
+                .token("token")
+                .endpoint("voice.discord.media"),
+        );
+        manager
+            .enqueue("1", AudioTrack::new("track-1", "memory://track"))
+            .unwrap();
+
+        let disconnected = manager.disconnect("1").unwrap();
+        assert_eq!(disconnected.status, VoiceConnectionStatus::Disconnected);
+        assert_eq!(manager.connection("1"), None);
+        assert_eq!(manager.player("1"), None);
+        assert!(matches!(
+            manager.events().last(),
+            Some(super::VoiceEvent::Disconnected { guild_id }) if *guild_id == Snowflake::from("1")
+        ));
+    }
+
+    #[test]
+    fn voice_manager_command_helpers_return_none_without_required_runtime_data() {
+        let mut manager = VoiceManager::new();
+        manager.connect(VoiceConnectionConfig::new("1", "2"));
+
+        assert_eq!(manager.identify_command("1", "3"), None);
+        assert_eq!(manager.runtime_config("1", "3"), None);
+        assert_eq!(manager.resume_command("1"), None);
+        assert_eq!(manager.select_protocol_command("1"), None);
+        assert_eq!(
+            manager.speaking_command("1", VoiceSpeakingFlags::MICROPHONE, 0),
+            None
+        );
+    }
+
+    #[test]
+    fn voice_manager_records_event_order_for_connect_and_updates() {
+        let mut manager = VoiceManager::new();
+        let guild_id = Snowflake::from("1");
+        manager.connect(
+            VoiceConnectionConfig::new(guild_id.clone(), "2")
+                .session_id("session")
+                .token("token")
+                .endpoint("voice.discord.media"),
+        );
+
+        assert!(matches!(
+            manager.events(),
+            [
+                super::VoiceEvent::Connecting { guild_id: connect_guild, channel_id },
+                super::VoiceEvent::Connected(state),
+            ] if *connect_guild == guild_id && *channel_id == Snowflake::from("2") && state.guild_id == guild_id
+        ));
+
+        manager.update_server(VoiceServerUpdate {
+            guild_id: guild_id.clone(),
+            token: "next-token".to_string(),
+            endpoint: Some("voice-next.discord.media".to_string()),
+        });
+        assert!(matches!(
+            &manager.events()[2..],
+            [
+                super::VoiceEvent::ServerUpdated { guild_id: server_guild },
+                super::VoiceEvent::Connected(state),
+            ] if *server_guild == guild_id && state.guild_id == guild_id
+        ));
+
+        manager.update_voice_state(&VoiceState {
+            guild_id: Some(guild_id.clone()),
+            channel_id: Some(Snowflake::from("2")),
+            session_id: Some("next-session".to_string()),
+            self_mute: false,
+            self_deaf: true,
+            ..VoiceState::default()
+        });
+        assert!(matches!(
+            &manager.events()[4..],
+            [
+                super::VoiceEvent::SessionUpdated { guild_id: session_guild },
+                super::VoiceEvent::Connected(state),
+            ] if *session_guild == guild_id && state.session_id.as_deref() == Some("next-session")
+        ));
+    }
+
+    #[test]
+    fn voice_audio_player_controls_preserve_fifo_queue_and_current_track() {
+        let mut player = super::AudioPlayer::new();
+        assert_eq!(player.play_next(), None);
+        assert_eq!(player.stop(), None);
+
+        player.enqueue(AudioTrack::new("track-1", "memory://one"));
+        player.enqueue(AudioTrack::new("track-2", "memory://two"));
+        assert_eq!(player.queue_len(), 2);
+
+        let first = player.play_next().unwrap();
+        assert_eq!(first.id, "track-1");
+        assert_eq!(player.queue_len(), 1);
+
+        let stopped = player.stop().unwrap();
+        assert_eq!(stopped.id, "track-1");
+        assert_eq!(player.queue_len(), 1);
+        assert_eq!(player.current(), None);
+
+        let second = player.play_next().unwrap();
+        assert_eq!(second.id, "track-2");
+        assert_eq!(player.queue_len(), 0);
+    }
+
+    #[test]
+    fn voice_builder_and_wrapper_types_serialize_expected_wire_shape() {
+        assert_eq!(
+            VoiceTransportProtocol::udp(),
+            VoiceTransportProtocol::new("udp")
+        );
+        assert_eq!(
+            VoiceEncryptionMode::aead_aes256_gcm_rtpsize(),
+            VoiceEncryptionMode::new("aead_aes256_gcm_rtpsize")
+        );
+        assert_eq!(
+            VoiceEncryptionMode::aead_xchacha20_poly1305_rtpsize(),
+            VoiceEncryptionMode::new("aead_xchacha20_poly1305_rtpsize")
+        );
+        assert_eq!(VoiceSpeakingFlags::MICROPHONE.bits(), 1);
+        assert_eq!(VoiceSpeakingFlags::SOUNDSHARE.bits(), 2);
+        assert_eq!(VoiceSpeakingFlags::PRIORITY.bits(), 4);
+        assert_eq!(VoiceGatewayHello::new(250).heartbeat_interval_ms, 250);
+
+        let ready = VoiceGatewayReady::new(42, "127.0.0.1", 5000)
+            .mode(VoiceEncryptionMode::aead_aes256_gcm_rtpsize())
+            .mode(VoiceEncryptionMode::aead_xchacha20_poly1305_rtpsize())
+            .heartbeat_interval_ms(250);
+        assert_eq!(
+            serde_json::to_value(&ready).unwrap(),
+            serde_json::json!({
+                "ssrc": 42,
+                "ip": "127.0.0.1",
+                "port": 5000,
+                "modes": [
+                    "aead_aes256_gcm_rtpsize",
+                    "aead_xchacha20_poly1305_rtpsize"
+                ],
+                "heartbeat_interval_ms": 250,
+            })
+        );
     }
 }

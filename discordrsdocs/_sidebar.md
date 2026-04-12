@@ -2,6 +2,7 @@
 - Guides
   - [Getting Started](#/docs/guide/getting-started)
   - [Usage Guide](#/docs/guide/usage-guide)
+  - [Testing And Coverage](#/docs/guide/testing-and-coverage)
   - [Architecture](#/docs/guide/architecture)
   - [Interaction Flow](#/docs/guide/interaction-flow)
   - [Deployment](#/docs/guide/deployment)

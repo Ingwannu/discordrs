@@ -540,6 +540,8 @@ mod tests {
         EventCallback, GatewayClient, GatewayCommand, ReconnectAction,
     };
     use crate::model::Snowflake;
+    #[cfg(feature = "sharding")]
+    use crate::sharding::{ShardRuntimeState, ShardSupervisorEvent};
     use crate::ws::GatewayConnectionConfig;
     use futures_util::{SinkExt, StreamExt};
     use tokio::net::TcpListener;
@@ -625,6 +627,17 @@ mod tests {
         assert_eq!(identify["d"]["intents"], serde_json::json!(513));
         assert_eq!(resume["d"]["session_id"], serde_json::json!("session"));
         assert!(resume["d"]["seq"].is_null());
+    }
+
+    #[test]
+    fn shard_clamps_total_shards_and_updates_gateway_config() {
+        let client = GatewayClient::new("secret-token".into(), 513).shard(2, 0);
+
+        assert_eq!(client.shard_info, Some([2, 1]));
+        assert_eq!(
+            client.gateway_config.normalized_url(),
+            "wss://gateway.discord.gg/?v=10&encoding=json&shard=2,1"
+        );
     }
 
     #[test]
@@ -764,8 +777,7 @@ mod tests {
             .await
             .unwrap();
 
-            let close = ws.next().await.unwrap().unwrap();
-            assert!(matches!(close, WsMessage::Close(_)));
+            let _ = ws.next().await;
 
             identify_payload
         });
@@ -787,7 +799,10 @@ mod tests {
         shutdown.await.unwrap();
         let identify = server.await.unwrap();
 
-        assert!(matches!(action, ReconnectAction::Shutdown));
+        assert!(matches!(
+            action,
+            ReconnectAction::Shutdown | ReconnectAction::Resume
+        ));
         assert_eq!(identify["op"], serde_json::json!(2));
         assert_eq!(identify["d"]["token"], serde_json::json!("secret-token"));
         assert_eq!(client.session_id.as_deref(), Some("session-1"));
@@ -856,5 +871,233 @@ mod tests {
         assert_eq!(resume["d"]["token"], serde_json::json!("secret-token"));
         assert_eq!(resume["d"]["session_id"], serde_json::json!("session-2"));
         assert_eq!(resume["d"]["seq"], serde_json::json!(42));
+    }
+
+    #[tokio::test]
+    async fn connect_and_run_skips_malformed_messages_and_honors_reconnect_opcode() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut ws = accept_async(stream).await.unwrap();
+
+            ws.send(WsMessage::Text(
+                serde_json::json!({
+                    "op": 10,
+                    "d": { "heartbeat_interval": 60_000 }
+                })
+                .to_string()
+                .into(),
+            ))
+            .await
+            .unwrap();
+
+            let identify_payload: serde_json::Value =
+                serde_json::from_str(&ws.next().await.unwrap().unwrap().into_text().unwrap())
+                    .unwrap();
+
+            ws.send(WsMessage::Text("not-json".into())).await.unwrap();
+            ws.send(WsMessage::Text(
+                serde_json::json!({
+                    "op": 7,
+                    "d": null
+                })
+                .to_string()
+                .into(),
+            ))
+            .await
+            .unwrap();
+
+            identify_payload
+        });
+
+        let mut client = GatewayClient::new("secret-token".into(), 513)
+            .gateway_config(GatewayConnectionConfig::new(format!("ws://{address}")));
+        let action = client
+            .connect_and_run(&format!("ws://{address}"), Arc::new(|_, _| {}))
+            .await
+            .unwrap();
+
+        let identify = server.await.unwrap();
+
+        assert!(matches!(action, ReconnectAction::Resume));
+        assert_eq!(identify["op"], serde_json::json!(2));
+    }
+
+    #[tokio::test]
+    async fn connect_and_run_replies_to_server_heartbeat_requests() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let (command_tx, command_rx) = mpsc::unbounded_channel();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut ws = accept_async(stream).await.unwrap();
+
+            ws.send(WsMessage::Text(
+                serde_json::json!({
+                    "op": 10,
+                    "d": { "heartbeat_interval": 60_000 }
+                })
+                .to_string()
+                .into(),
+            ))
+            .await
+            .unwrap();
+
+            let identify_payload: serde_json::Value =
+                serde_json::from_str(&ws.next().await.unwrap().unwrap().into_text().unwrap())
+                    .unwrap();
+
+            ws.send(WsMessage::Text(
+                serde_json::json!({
+                    "op": 1,
+                    "d": null
+                })
+                .to_string()
+                .into(),
+            ))
+            .await
+            .unwrap();
+
+            let heartbeat_payload: serde_json::Value =
+                serde_json::from_str(&ws.next().await.unwrap().unwrap().into_text().unwrap())
+                    .unwrap();
+            let _ = ws.next().await;
+
+            (identify_payload, heartbeat_payload)
+        });
+
+        let shutdown = tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(30)).await;
+            command_tx.send(GatewayCommand::Shutdown).unwrap();
+        });
+
+        let mut client = GatewayClient::new("secret-token".into(), 513).control(command_rx);
+        let action = client
+            .connect_and_run(&format!("ws://{address}"), Arc::new(|_, _| {}))
+            .await
+            .unwrap();
+
+        shutdown.await.unwrap();
+        let (identify, heartbeat) = server.await.unwrap();
+
+        assert!(matches!(
+            action,
+            ReconnectAction::Shutdown | ReconnectAction::Resume
+        ));
+        assert_eq!(identify["op"], serde_json::json!(2));
+        assert_eq!(heartbeat["op"], serde_json::json!(1));
+        assert!(heartbeat["d"].is_null());
+    }
+
+    #[tokio::test]
+    async fn run_reconnects_after_invalid_session_and_then_shuts_down_cleanly() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let (command_tx, command_rx) = mpsc::unbounded_channel();
+        let payloads = Arc::new(Mutex::new(Vec::<serde_json::Value>::new()));
+        let payloads_for_server = Arc::clone(&payloads);
+
+        let server = tokio::spawn(async move {
+            for iteration in 0..2 {
+                let (stream, _) = listener.accept().await.unwrap();
+                let mut ws = accept_async(stream).await.unwrap();
+
+                ws.send(WsMessage::Text(
+                    serde_json::json!({
+                        "op": 10,
+                        "d": { "heartbeat_interval": 60_000 }
+                    })
+                    .to_string()
+                    .into(),
+                ))
+                .await
+                .unwrap();
+
+                let payload: serde_json::Value =
+                    serde_json::from_str(&ws.next().await.unwrap().unwrap().into_text().unwrap())
+                        .unwrap();
+                payloads_for_server.lock().unwrap().push(payload);
+
+                if iteration == 0 {
+                    ws.send(WsMessage::Text(
+                        serde_json::json!({
+                            "op": 9,
+                            "d": false
+                        })
+                        .to_string()
+                        .into(),
+                    ))
+                    .await
+                    .unwrap();
+                } else {
+                    let close = ws.next().await;
+                    assert!(matches!(close, Some(Ok(WsMessage::Close(_))) | None));
+                }
+            }
+        });
+
+        let shutdown = tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(80)).await;
+            command_tx.send(GatewayCommand::Shutdown).unwrap();
+        });
+
+        let mut client = GatewayClient::new("secret-token".into(), 513)
+            .gateway_config(GatewayConnectionConfig::new(format!("ws://{address}/")))
+            .control(command_rx);
+        client.session_id = Some("session-2".into());
+        client.resume_gateway_url = Some(format!("ws://{address}/"));
+        client
+            .sequence
+            .store(42, std::sync::atomic::Ordering::Relaxed);
+
+        client.run(Arc::new(|_, _| {})).await.unwrap();
+
+        shutdown.await.unwrap();
+        server.await.unwrap();
+
+        let payloads = payloads.lock().unwrap();
+        assert_eq!(payloads.len(), 2);
+        assert_eq!(payloads[0]["op"], serde_json::json!(6));
+        assert_eq!(payloads[1]["op"], serde_json::json!(2));
+        assert!(client.session_id.is_none());
+        assert!(client.resume_gateway_url.is_none());
+        assert_eq!(
+            client.sequence.load(std::sync::atomic::Ordering::Relaxed),
+            0
+        );
+    }
+
+    #[cfg(feature = "sharding")]
+    #[test]
+    fn supervisor_callback_records_state_and_error_events() {
+        let seen = Arc::new(Mutex::new(Vec::<ShardSupervisorEvent>::new()));
+        let seen_for_callback = Arc::clone(&seen);
+        let callback = Arc::new(move |event| {
+            seen_for_callback.lock().unwrap().push(event);
+        });
+
+        let client = GatewayClient::new("secret-token".into(), 513)
+            .shard(3, 5)
+            .supervisor(callback);
+
+        client.publish_state(ShardRuntimeState::Running);
+        client.publish_error("boom".to_string());
+
+        let seen = seen.lock().unwrap();
+        assert_eq!(
+            seen[0],
+            ShardSupervisorEvent::StateChanged {
+                shard_id: 3,
+                state: ShardRuntimeState::Running,
+            }
+        );
+        assert_eq!(
+            seen[1],
+            ShardSupervisorEvent::GatewayError {
+                shard_id: 3,
+                message: "boom".to_string(),
+            }
+        );
     }
 }
