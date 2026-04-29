@@ -1,7 +1,10 @@
+use std::collections::HashMap;
+
 use serde::{Deserialize, Serialize};
 
 use crate::model::{
-    ApplicationCommand, ApplicationCommandOption, ApplicationCommandOptionChoice,
+    ApplicationCommand, ApplicationCommandHandlerType, ApplicationCommandOption,
+    ApplicationCommandOptionChoice, ApplicationIntegrationType, InteractionContextType,
     PermissionsBitField,
 };
 
@@ -9,6 +12,7 @@ pub mod command_type {
     pub const CHAT_INPUT: u8 = 1;
     pub const USER: u8 = 2;
     pub const MESSAGE: u8 = 3;
+    pub const PRIMARY_ENTRY_POINT: u8 = 4;
 }
 
 pub mod option_type {
@@ -30,14 +34,24 @@ pub struct CommandDefinition {
     #[serde(rename = "type")]
     pub kind: u8,
     pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name_localizations: Option<HashMap<String, String>>,
     #[serde(default)]
     pub description: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description_localizations: Option<HashMap<String, String>>,
     #[serde(default)]
     pub options: Vec<ApplicationCommandOption>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub default_member_permissions: Option<PermissionsBitField>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dm_permission: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub integration_types: Option<Vec<ApplicationIntegrationType>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub contexts: Option<Vec<InteractionContextType>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub handler: Option<ApplicationCommandHandlerType>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub nsfw: Option<bool>,
 }
@@ -50,10 +64,16 @@ impl From<CommandDefinition> for ApplicationCommand {
             guild_id: None,
             kind: value.kind,
             name: value.name,
+            name_localizations: value.name_localizations,
             description: value.description,
+            description_localizations: value.description_localizations,
             options: value.options,
             default_member_permissions: value.default_member_permissions,
             dm_permission: value.dm_permission,
+            integration_types: value.integration_types,
+            contexts: value.contexts,
+            handler: value.handler,
+            version: None,
             nsfw: value.nsfw,
         }
     }
@@ -225,6 +245,102 @@ impl SlashCommandBuilder {
         self
     }
 
+    pub fn integration_types<I>(mut self, integration_types: I) -> Self
+    where
+        I: IntoIterator<Item = ApplicationIntegrationType>,
+    {
+        self.inner.integration_types = Some(integration_types.into_iter().collect());
+        self
+    }
+
+    pub fn contexts<I>(mut self, contexts: I) -> Self
+    where
+        I: IntoIterator<Item = InteractionContextType>,
+    {
+        self.inner.contexts = Some(contexts.into_iter().collect());
+        self
+    }
+
+    pub fn name_localization(mut self, locale: &str, name: &str) -> Self {
+        self.inner
+            .name_localizations
+            .get_or_insert_with(HashMap::new)
+            .insert(locale.to_string(), name.to_string());
+        self
+    }
+
+    pub fn description_localization(mut self, locale: &str, description: &str) -> Self {
+        self.inner
+            .description_localizations
+            .get_or_insert_with(HashMap::new)
+            .insert(locale.to_string(), description.to_string());
+        self
+    }
+
+    pub fn handler(mut self, handler: ApplicationCommandHandlerType) -> Self {
+        self.inner.handler = Some(handler);
+        self
+    }
+
+    pub fn build(self) -> CommandDefinition {
+        self.inner
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct PrimaryEntryPointCommandBuilder {
+    inner: CommandDefinition,
+}
+
+impl PrimaryEntryPointCommandBuilder {
+    pub fn new(name: &str, description: &str) -> Self {
+        Self {
+            inner: CommandDefinition {
+                kind: command_type::PRIMARY_ENTRY_POINT,
+                name: name.to_string(),
+                description: description.to_string(),
+                ..CommandDefinition::default()
+            },
+        }
+    }
+
+    pub fn integration_types<I>(mut self, integration_types: I) -> Self
+    where
+        I: IntoIterator<Item = ApplicationIntegrationType>,
+    {
+        self.inner.integration_types = Some(integration_types.into_iter().collect());
+        self
+    }
+
+    pub fn contexts<I>(mut self, contexts: I) -> Self
+    where
+        I: IntoIterator<Item = InteractionContextType>,
+    {
+        self.inner.contexts = Some(contexts.into_iter().collect());
+        self
+    }
+
+    pub fn name_localization(mut self, locale: &str, name: &str) -> Self {
+        self.inner
+            .name_localizations
+            .get_or_insert_with(HashMap::new)
+            .insert(locale.to_string(), name.to_string());
+        self
+    }
+
+    pub fn description_localization(mut self, locale: &str, description: &str) -> Self {
+        self.inner
+            .description_localizations
+            .get_or_insert_with(HashMap::new)
+            .insert(locale.to_string(), description.to_string());
+        self
+    }
+
+    pub fn handler(mut self, handler: ApplicationCommandHandlerType) -> Self {
+        self.inner.handler = Some(handler);
+        self
+    }
+
     pub fn build(self) -> CommandDefinition {
         self.inner
     }
@@ -298,9 +414,12 @@ mod tests {
 
     use super::{
         command_type, option_type, CommandOptionBuilder, MessageCommandBuilder,
-        SlashCommandBuilder, UserCommandBuilder,
+        PrimaryEntryPointCommandBuilder, SlashCommandBuilder, UserCommandBuilder,
     };
-    use crate::model::{ApplicationCommand, PermissionsBitField};
+    use crate::model::{
+        ApplicationCommand, ApplicationCommandHandlerType, ApplicationIntegrationType,
+        InteractionContextType, PermissionsBitField,
+    };
 
     #[test]
     fn slash_command_builder_serializes_nested_options() {
@@ -430,6 +549,17 @@ mod tests {
             .default_member_permissions(permissions)
             .dm_permission(false)
             .nsfw(true)
+            .integration_types([
+                ApplicationIntegrationType::GUILD_INSTALL,
+                ApplicationIntegrationType::USER_INSTALL,
+            ])
+            .contexts([
+                InteractionContextType::GUILD,
+                InteractionContextType::BOT_DM,
+            ])
+            .name_localization("ko", "차단")
+            .description_localization("ko", "멤버 차단")
+            .handler(ApplicationCommandHandlerType::APP_HANDLER)
             .build();
 
         let application_command: ApplicationCommand = command.clone().into();
@@ -446,6 +576,53 @@ mod tests {
         );
         assert_eq!(application_command.dm_permission, Some(false));
         assert_eq!(application_command.nsfw, Some(true));
+        assert_eq!(
+            application_command.integration_types,
+            Some(vec![
+                ApplicationIntegrationType::GUILD_INSTALL,
+                ApplicationIntegrationType::USER_INSTALL
+            ])
+        );
+        assert_eq!(
+            application_command.contexts,
+            Some(vec![
+                InteractionContextType::GUILD,
+                InteractionContextType::BOT_DM
+            ])
+        );
+        assert_eq!(
+            application_command
+                .name_localizations
+                .as_ref()
+                .and_then(|localizations| localizations.get("ko"))
+                .map(String::as_str),
+            Some("차단")
+        );
+        assert_eq!(
+            application_command.handler,
+            Some(ApplicationCommandHandlerType::APP_HANDLER)
+        );
+    }
+
+    #[test]
+    fn primary_entry_point_builder_serializes_activity_fields() {
+        let command = PrimaryEntryPointCommandBuilder::new("launch", "Launch activity")
+            .integration_types([
+                ApplicationIntegrationType::GUILD_INSTALL,
+                ApplicationIntegrationType::USER_INSTALL,
+            ])
+            .contexts([
+                InteractionContextType::GUILD,
+                InteractionContextType::BOT_DM,
+            ])
+            .handler(ApplicationCommandHandlerType::DISCORD_LAUNCH_ACTIVITY)
+            .build();
+
+        let value = serde_json::to_value(command).unwrap();
+        assert_eq!(value["type"], json!(command_type::PRIMARY_ENTRY_POINT));
+        assert_eq!(value["integration_types"], json!([0, 1]));
+        assert_eq!(value["contexts"], json!([0, 1]));
+        assert_eq!(value["handler"], json!(2));
     }
 
     #[test]

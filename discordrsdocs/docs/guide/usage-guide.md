@@ -1,25 +1,36 @@
-# discordrs Usage
+﻿# discord.rs Usage
 
-`discordrs` is a standalone Discord bot framework for Rust with a typed Gateway runtime, typed REST surface, Components V2 builders, cache managers, and collectors.
+`discord.rs` is a standalone Discord bot framework for Rust with a typed Gateway runtime, typed REST surface, Components V2 builders, cache managers, and collectors.
+
+Brand name: discord.rs. The crates.io package name and Rust import path remain `discordrs`.
 
 ## 1. Pick a runtime mode
 
 ```toml
 [dependencies]
 # Core only
-discordrs = "1.0.0"
+discordrs = "1.2.0"
 
 # Typed gateway runtime
-discordrs = { version = "1.0.0", features = ["gateway"] }
+discordrs = { version = "1.2.0", features = ["gateway"] }
 
 # Typed gateway runtime with cache storage enabled
-discordrs = { version = "1.0.0", features = ["gateway", "cache"] }
+discordrs = { version = "1.2.0", features = ["gateway", "cache"] }
 
 # Typed gateway runtime with collectors
-discordrs = { version = "1.0.0", features = ["gateway", "collectors"] }
+discordrs = { version = "1.2.0", features = ["gateway", "collectors"] }
 
 # HTTP interactions endpoint
-discordrs = { version = "1.0.0", features = ["interactions"] }
+discordrs = { version = "1.2.0", features = ["interactions"] }
+
+# Voice receive and Opus decode
+discordrs = { version = "1.2.0", features = ["voice"] }
+
+# PCM source/mixer plus Opus encoder playback
+discordrs = { version = "1.2.0", features = ["voice", "voice-encode"] }
+
+# Experimental DAVE/MLS receive and outbound media hook
+discordrs = { version = "1.2.0", features = ["voice", "dave"] }
 ```
 
 ## 2. Start a typed Gateway client
@@ -77,7 +88,39 @@ let command = SlashCommandBuilder::new("ticket", "Create a support ticket")
 - `cache`: enables the in-memory cache storage used by `CacheHandle` and gateway manager reads
 - `collectors`: enables async collectors for messages, interactions, components, and modals
 
-## 6. Keep old raw helpers only for migration
+## 6. Use typed Discord coverage before raw JSON
+
+- Polls: `CreatePoll`, `Poll`, `get_poll_answer_voters(...)`, `end_poll(...)`, `MESSAGE_POLL_VOTE_ADD`, `MESSAGE_POLL_VOTE_REMOVE`
+- Monetization: `Sku`, `Entitlement`, `Subscription`, entitlement helpers, SKU subscription helpers, `ENTITLEMENT_*`, `SUBSCRIPTION_*`
+- Soundboard: default/guild soundboard REST helpers plus `GUILD_SOUNDBOARD_*` and `SOUNDBOARD_SOUNDS`
+- Threads and forums: thread member/detail/archive helpers plus forum tags, applied tags, default reactions, and default thread slowmode fields
+- Integrations and invites: integration list/delete, `INTEGRATION_*`, invite options, `INVITE_CREATE`, and `INVITE_DELETE`
+
+## 7. Voice receive boundaries
+
+```rust
+use discordrs::{connect_voice_runtime, VoiceOpusDecoder, VoiceRuntimeConfig};
+
+async fn receive_pcm() -> Result<(), discordrs::DiscordError> {
+    let handle = connect_voice_runtime(VoiceRuntimeConfig::new(
+        "guild_id",
+        "bot_user_id",
+        "voice_session_id",
+        "voice_token",
+        "wss://voice.discord.media/?v=8",
+    ))
+    .await?;
+
+    let mut decoder = VoiceOpusDecoder::discord_default()?;
+    let decoded = handle.recv_decoded_voice_packet(&mut decoder, 2048).await?;
+    println!("{} PCM samples/channel", decoded.samples_per_channel);
+    handle.close().await
+}
+```
+
+Default `voice` covers raw UDP receive, RTP header parsing, RTP-size transport decrypt, Opus-frame send, and Opus PCM decode. Enable `voice-encode` for `PcmFrame`, `AudioSource`, `AudioMixer`, and `VoiceOpusEncoder`. Active DAVE sessions require `recv_voice_packet_with_dave(...)` or `recv_decoded_voice_packet_with_dave(...)` with a `VoiceDaveFrameDecryptor`; the `dave` feature exposes experimental `VoiceDaveySession` and outbound DAVE media helpers.
+
+## 8. Keep old raw helpers only for migration
 
 - `parse_raw_interaction(...)` still exists
 - `BotClient` still exists as a compatibility alias

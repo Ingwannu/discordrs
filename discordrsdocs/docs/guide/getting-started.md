@@ -1,4 +1,4 @@
-# Getting Started
+﻿# Getting Started
 
 ## Prerequisites
 
@@ -10,7 +10,7 @@
 
 ```toml
 [dependencies]
-discordrs = { version = "1.0.0", features = ["gateway"] }
+discordrs = { version = "1.2.0", features = ["gateway"] }
 ```
 
 ## Minimal Typed Gateway Bot

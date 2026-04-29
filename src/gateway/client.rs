@@ -1,10 +1,12 @@
+use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
+use flate2::{Decompress, FlushDecompress};
 use futures_util::{SinkExt, StreamExt};
 use serde_json::Value;
 use tokio::sync::mpsc;
-use tokio::time::{sleep, timeout, Duration};
+use tokio::time::{sleep, timeout, Duration, Instant};
 use tokio_tungstenite::{
     connect_async,
     tungstenite::{
@@ -14,10 +16,10 @@ use tokio_tungstenite::{
 };
 use tracing::{debug, error, info, warn};
 
-use crate::model::Snowflake;
+use crate::model::{RequestGuildMembers, Snowflake, UpdatePresence};
 #[cfg(feature = "sharding")]
 use crate::sharding::{ShardRuntimeState, ShardSupervisorEvent};
-use crate::ws::GatewayConnectionConfig;
+use crate::ws::{GatewayCompression, GatewayConnectionConfig};
 
 // Gateway opcodes
 const OP_DISPATCH: u64 = 0;
@@ -28,6 +30,10 @@ const OP_RECONNECT: u64 = 7;
 const OP_INVALID_SESSION: u64 = 9;
 const OP_HELLO: u64 = 10;
 const OP_HEARTBEAT_ACK: u64 = 11;
+const ZLIB_SUFFIX: &[u8] = &[0x00, 0x00, 0xff, 0xff];
+const PRESENCE_UPDATE_LIMIT: usize = 5;
+const PRESENCE_UPDATE_WINDOW: Duration = Duration::from_secs(60);
+const GATEWAY_COMMAND_MIN_SPACING: Duration = Duration::from_millis(250);
 
 pub(crate) struct GatewayClient {
     token: String,
@@ -53,7 +59,83 @@ pub(crate) enum GatewayCommand {
     Shutdown,
     Reconnect,
     UpdatePresence(String),
+    UpdatePresenceData(UpdatePresence),
+    RequestGuildMembers(RequestGuildMembers),
     SendPayload(Value),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum GatewayCommandClass {
+    PresenceUpdate,
+    BurstSensitive,
+    Other,
+}
+
+#[derive(Default)]
+struct GatewayOutboundLimiter {
+    presence_updates: VecDeque<Instant>,
+    next_burst_sensitive_at: Option<Instant>,
+}
+
+impl GatewayOutboundLimiter {
+    async fn wait_for_command(&mut self, command: &GatewayCommand) {
+        loop {
+            let Some(delay) = self.reserve_delay(command, Instant::now()) else {
+                break;
+            };
+            sleep(delay).await;
+        }
+    }
+
+    fn reserve_delay(&mut self, command: &GatewayCommand, now: Instant) -> Option<Duration> {
+        match classify_gateway_command(command) {
+            GatewayCommandClass::PresenceUpdate => self.reserve_presence_update(now),
+            GatewayCommandClass::BurstSensitive => self.reserve_burst_sensitive(now),
+            GatewayCommandClass::Other => None,
+        }
+    }
+
+    fn reserve_presence_update(&mut self, now: Instant) -> Option<Duration> {
+        while self.presence_updates.front().is_some_and(|sent_at| {
+            now.saturating_duration_since(*sent_at) >= PRESENCE_UPDATE_WINDOW
+        }) {
+            self.presence_updates.pop_front();
+        }
+
+        if self.presence_updates.len() >= PRESENCE_UPDATE_LIMIT {
+            let next_allowed = self.presence_updates[0] + PRESENCE_UPDATE_WINDOW;
+            return Some(next_allowed.saturating_duration_since(now));
+        }
+
+        self.presence_updates.push_back(now);
+        None
+    }
+
+    fn reserve_burst_sensitive(&mut self, now: Instant) -> Option<Duration> {
+        if let Some(next_allowed) = self.next_burst_sensitive_at {
+            if next_allowed > now {
+                return Some(next_allowed.saturating_duration_since(now));
+            }
+        }
+
+        self.next_burst_sensitive_at = Some(now + GATEWAY_COMMAND_MIN_SPACING);
+        None
+    }
+}
+
+fn classify_gateway_command(command: &GatewayCommand) -> GatewayCommandClass {
+    match command {
+        GatewayCommand::UpdatePresence(_) | GatewayCommand::UpdatePresenceData(_) => {
+            GatewayCommandClass::PresenceUpdate
+        }
+        GatewayCommand::RequestGuildMembers(_) => GatewayCommandClass::BurstSensitive,
+        GatewayCommand::SendPayload(payload) => match payload.get("op").and_then(Value::as_u64) {
+            Some(3) => GatewayCommandClass::PresenceUpdate,
+            Some(4 | 8 | 14 | 31) => GatewayCommandClass::BurstSensitive,
+            _ => GatewayCommandClass::Other,
+        },
+        GatewayCommand::Shutdown | GatewayCommand::Reconnect => GatewayCommandClass::Other,
+    }
 }
 
 impl GatewayClient {
@@ -108,7 +190,6 @@ impl GatewayClient {
             let url = self
                 .resume_gateway_url
                 .clone()
-                .map(|url| GatewayConnectionConfig::new(url).normalized_url())
                 .unwrap_or_else(|| self.gateway_config.normalized_url());
             info!("Connecting to gateway: {url}");
 
@@ -140,14 +221,14 @@ impl GatewayClient {
                     self.publish_error(e.to_string());
                     error!("Gateway connection error: {e}");
                     if self
-                        .wait_for_backoff_command(Duration::from_secs(backoff.min(60)))
+                        .wait_for_backoff_command(Duration::from_secs(backoff.min(300)))
                         .await?
                     {
                         #[cfg(feature = "sharding")]
                         self.publish_state(ShardRuntimeState::Stopped);
                         return Ok(());
                     }
-                    backoff = (backoff * 2).min(60);
+                    backoff = (backoff * 2).min(300);
                 }
             }
         }
@@ -183,7 +264,12 @@ impl GatewayClient {
                 .await?;
             debug!("Sent Resume");
         } else {
-            let identify = identify_payload(&self.token, self.intents, self.shard_info);
+            let identify = identify_payload(
+                &self.token,
+                self.intents,
+                self.shard_info,
+                self.gateway_config.compression_kind().is_none(),
+            );
             write
                 .send(WsMessage::Text(identify.to_string().into()))
                 .await?;
@@ -225,84 +311,21 @@ impl GatewayClient {
         });
 
         // Main read loop
+        let mut compression_decoder =
+            GatewayCompressionDecoder::new(self.gateway_config.compression_kind());
+        let mut outbound_limiter = GatewayOutboundLimiter::default();
         let action = loop {
             tokio::select! {
                 msg = read.next() => {
-                    match msg {
-                        Some(Ok(WsMessage::Text(text))) => {
-                            let payload: Value = match serde_json::from_str(&text) {
-                                Ok(v) => v,
+                    let text = match msg {
+                        Some(Ok(WsMessage::Text(text))) => text.to_string(),
+                        Some(Ok(WsMessage::Binary(bytes))) => {
+                            match compression_decoder.decode(&bytes) {
+                                Ok(Some(decompressed)) => decompressed,
+                                Ok(None) => continue,
                                 Err(e) => {
-                                    warn!("Failed to parse gateway message: {e}");
+                                    warn!("Failed to decode compressed gateway payload: {e}");
                                     continue;
-                                }
-                            };
-
-                            let op = payload["op"].as_u64().unwrap_or(u64::MAX);
-
-                            match op {
-                                OP_DISPATCH => {
-                                    if let Some(s) = payload["s"].as_u64() {
-                                        self.sequence.store(s, Ordering::Relaxed);
-                                    }
-                                    let event_name = payload["t"].as_str().unwrap_or("").to_string();
-                                    let data = payload["d"].clone();
-
-                                    // Update session info from READY
-                                    if event_name == "READY" {
-                                        if let Some(sid) = data["session_id"].as_str() {
-                                            self.session_id = Some(sid.to_string());
-                                        }
-                                        if let Some(resume_url) = data["resume_gateway_url"].as_str() {
-                                            self.resume_gateway_url = Some(
-                                                GatewayConnectionConfig::new(resume_url).normalized_url(),
-                                            );
-                                        }
-                                        #[cfg(feature = "sharding")]
-                                        if let Some(session_id) = self.session_id.clone() {
-                                            self.publish_supervisor(ShardSupervisorEvent::SessionEstablished {
-                                                shard_id: self.current_shard_id(),
-                                                session_id,
-                                            });
-                                            self.publish_state(ShardRuntimeState::Running);
-                                        }
-                                        info!("Received READY, session_id={}", self.session_id.as_deref().unwrap_or("?"));
-                                    }
-
-                                    on_event(event_name, data);
-                                }
-                                OP_HEARTBEAT => {
-                                    let seq = self.sequence.load(Ordering::Relaxed);
-                                    let hb = serde_json::json!({
-                                        "op": OP_HEARTBEAT,
-                                        "d": if seq == 0 { Value::Null } else { Value::Number(seq.into()) }
-                                    });
-                                    write.send(WsMessage::Text(hb.to_string().into())).await?;
-                                }
-                                OP_HEARTBEAT_ACK => {
-                                    self.heartbeat_ack_received.store(true, Ordering::Relaxed);
-                                    debug!("Heartbeat ACK received");
-                                }
-                                OP_RECONNECT => {
-                                    #[cfg(feature = "sharding")]
-                                    self.publish_state(ShardRuntimeState::Reconnecting);
-                                    info!("Received Reconnect opcode");
-                                    break ReconnectAction::Resume;
-                                }
-                                OP_INVALID_SESSION => {
-                                    let resumable = payload["d"].as_bool().unwrap_or(false);
-                                    #[cfg(feature = "sharding")]
-                                    self.publish_state(ShardRuntimeState::Reconnecting);
-                                    warn!("Invalid session, resumable={resumable}");
-                                    sleep(Duration::from_secs(2)).await;
-                                    if resumable {
-                                        break ReconnectAction::Resume;
-                                    } else {
-                                        break ReconnectAction::Reconnect;
-                                    }
-                                }
-                                _ => {
-                                    debug!("Unhandled gateway opcode: {op}");
                                 }
                             }
                         }
@@ -327,7 +350,85 @@ impl GatewayClient {
                             warn!("Gateway stream ended");
                             break ReconnectAction::Resume;
                         }
-                        _ => {}
+                        _ => continue,
+                    };
+
+                    let payload: Value = match serde_json::from_str(&text) {
+                        Ok(v) => v,
+                        Err(e) => {
+                            warn!("Failed to parse gateway message: {e}");
+                            continue;
+                        }
+                    };
+
+                    let op = payload["op"].as_u64().unwrap_or(u64::MAX);
+
+                    match op {
+                        OP_DISPATCH => {
+                            if let Some(s) = payload["s"].as_u64() {
+                                self.sequence.store(s, Ordering::Relaxed);
+                            }
+                            let event_name = payload["t"].as_str().unwrap_or("").to_string();
+                            let data = payload["d"].clone();
+
+                            if event_name == "READY" {
+                                if let Some(sid) = data["session_id"].as_str() {
+                                    self.session_id = Some(sid.to_string());
+                                }
+                                if let Some(resume_url) = data["resume_gateway_url"].as_str() {
+                                    self.resume_gateway_url = Some(
+                                        self.gateway_config
+                                            .clone()
+                                            .with_base_url(resume_url)
+                                            .normalized_url(),
+                                    );
+                                }
+                                #[cfg(feature = "sharding")]
+                                if let Some(session_id) = self.session_id.clone() {
+                                    self.publish_supervisor(ShardSupervisorEvent::SessionEstablished {
+                                        shard_id: self.current_shard_id(),
+                                        session_id,
+                                    });
+                                    self.publish_state(ShardRuntimeState::Running);
+                                }
+                                info!("Received READY, session_id={}", self.session_id.as_deref().unwrap_or("?"));
+                            }
+
+                            on_event(event_name, data);
+                        }
+                        OP_HEARTBEAT => {
+                            let seq = self.sequence.load(Ordering::Relaxed);
+                            let hb = serde_json::json!({
+                                "op": OP_HEARTBEAT,
+                                "d": if seq == 0 { Value::Null } else { Value::Number(seq.into()) }
+                            });
+                            write.send(WsMessage::Text(hb.to_string().into())).await?;
+                        }
+                        OP_HEARTBEAT_ACK => {
+                            self.heartbeat_ack_received.store(true, Ordering::Relaxed);
+                            debug!("Heartbeat ACK received");
+                        }
+                        OP_RECONNECT => {
+                            #[cfg(feature = "sharding")]
+                            self.publish_state(ShardRuntimeState::Reconnecting);
+                            info!("Received Reconnect opcode");
+                            break ReconnectAction::Resume;
+                        }
+                        OP_INVALID_SESSION => {
+                            let resumable = payload["d"].as_bool().unwrap_or(false);
+                            #[cfg(feature = "sharding")]
+                            self.publish_state(ShardRuntimeState::Reconnecting);
+                            warn!("Invalid session, resumable={resumable}");
+                            sleep(Duration::from_secs(2)).await;
+                            if resumable {
+                                break ReconnectAction::Resume;
+                            } else {
+                                break ReconnectAction::Reconnect;
+                            }
+                        }
+                        _ => {
+                            debug!("Unhandled gateway opcode: {op}");
+                        }
                     }
                 }
                 Some(msg) = heartbeat_rx.recv() => {
@@ -353,21 +454,39 @@ impl GatewayClient {
                         }
                         Some(GatewayCommand::Reconnect) => break ReconnectAction::Resume,
                         Some(GatewayCommand::UpdatePresence(status)) => {
-                            let payload = serde_json::json!({
-                                "op": 3,
-                                "d": {
-                                    "since": Value::Null,
-                                    "activities": [{
-                                        "name": status,
-                                        "type": 0
-                                    }],
-                                    "status": "online",
-                                    "afk": false
-                                }
-                            });
+                            let command = GatewayCommand::UpdatePresence(status);
+                            outbound_limiter.wait_for_command(&command).await;
+                            let GatewayCommand::UpdatePresence(status) = command else {
+                                unreachable!("command was constructed as UpdatePresence");
+                            };
+                            let payload =
+                                update_presence_payload(UpdatePresence::online_with_activity(status));
+                            write.send(WsMessage::Text(payload.to_string().into())).await?;
+                        }
+                        Some(GatewayCommand::UpdatePresenceData(presence)) => {
+                            let command = GatewayCommand::UpdatePresenceData(presence);
+                            outbound_limiter.wait_for_command(&command).await;
+                            let GatewayCommand::UpdatePresenceData(presence) = command else {
+                                unreachable!("command was constructed as UpdatePresenceData");
+                            };
+                            let payload = update_presence_payload(presence);
+                            write.send(WsMessage::Text(payload.to_string().into())).await?;
+                        }
+                        Some(GatewayCommand::RequestGuildMembers(request)) => {
+                            let command = GatewayCommand::RequestGuildMembers(request);
+                            outbound_limiter.wait_for_command(&command).await;
+                            let GatewayCommand::RequestGuildMembers(request) = command else {
+                                unreachable!("command was constructed as RequestGuildMembers");
+                            };
+                            let payload = request_guild_members_payload(request);
                             write.send(WsMessage::Text(payload.to_string().into())).await?;
                         }
                         Some(GatewayCommand::SendPayload(payload)) => {
+                            let command = GatewayCommand::SendPayload(payload);
+                            outbound_limiter.wait_for_command(&command).await;
+                            let GatewayCommand::SendPayload(payload) = command else {
+                                unreachable!("command was constructed as SendPayload");
+                            };
                             write.send(WsMessage::Text(payload.to_string().into())).await?;
                         }
                         None => {}
@@ -413,6 +532,33 @@ pub(crate) fn voice_state_update_payload(
     })
 }
 
+pub(crate) fn update_presence_payload(presence: UpdatePresence) -> Value {
+    serde_json::json!({
+        "op": 3,
+        "d": presence
+    })
+}
+
+pub(crate) fn request_guild_members_payload(request: RequestGuildMembers) -> Value {
+    serde_json::json!({
+        "op": 8,
+        "d": request
+    })
+}
+
+pub(crate) fn request_soundboard_sounds_payload(
+    guild_ids: Vec<Snowflake>,
+    channels: Option<HashMap<Snowflake, Vec<Snowflake>>>,
+) -> Value {
+    serde_json::json!({
+        "op": 31,
+        "d": {
+            "guild_ids": guild_ids,
+            "channels": channels
+        }
+    })
+}
+
 fn rand_jitter() -> f64 {
     // Simple jitter: use current time nanos as pseudo-random
     let nanos = std::time::SystemTime::now()
@@ -438,7 +584,12 @@ fn resume_payload(token: &str, session_id: &str, seq: u64) -> Value {
     })
 }
 
-fn identify_payload(token: &str, intents: u64, shard_info: Option<[u32; 2]>) -> Value {
+fn identify_payload(
+    token: &str,
+    intents: u64,
+    shard_info: Option<[u32; 2]>,
+    payload_compression: bool,
+) -> Value {
     let mut identify = serde_json::json!({
         "op": OP_IDENTIFY,
         "d": {
@@ -451,6 +602,9 @@ fn identify_payload(token: &str, intents: u64, shard_info: Option<[u32; 2]>) -> 
             }
         }
     });
+    if payload_compression {
+        identify["d"]["compress"] = serde_json::json!(true);
+    }
     if let Some(shard_info) = shard_info {
         identify["d"]["shard"] = serde_json::json!(shard_info);
     }
@@ -475,6 +629,139 @@ fn terminal_close_error(frame: Option<CloseFrame>) -> String {
             frame.reason
         ),
         None => "gateway closed with terminal close code".to_string(),
+    }
+}
+
+struct GatewayZlibStream {
+    decoder: Decompress,
+    pending: Vec<u8>,
+}
+
+enum GatewayCompressionDecoder {
+    None,
+    Zlib(GatewayZlibStream),
+    #[cfg(feature = "zstd-stream")]
+    Zstd(GatewayZstdStream),
+}
+
+impl GatewayCompressionDecoder {
+    fn new(compression: Option<GatewayCompression>) -> Self {
+        match compression {
+            Some(GatewayCompression::ZlibStream) => Self::Zlib(GatewayZlibStream::new()),
+            #[cfg(feature = "zstd-stream")]
+            Some(GatewayCompression::ZstdStream) => Self::Zstd(GatewayZstdStream::new()),
+            None => Self::None,
+        }
+    }
+
+    fn decode(&mut self, bytes: &[u8]) -> Result<Option<String>, String> {
+        match self {
+            GatewayCompressionDecoder::None => String::from_utf8(bytes.to_vec())
+                .map(Some)
+                .map_err(|e| format!("binary gateway payload was not valid UTF-8: {e}")),
+            GatewayCompressionDecoder::Zlib(stream) => stream.decode(bytes),
+            #[cfg(feature = "zstd-stream")]
+            GatewayCompressionDecoder::Zstd(stream) => stream.decode(bytes),
+        }
+    }
+}
+
+#[cfg(feature = "zstd-stream")]
+struct GatewayZstdStream {
+    decoder: zstd::stream::raw::Decoder<'static>,
+}
+
+#[cfg(feature = "zstd-stream")]
+impl GatewayZstdStream {
+    fn new() -> Self {
+        Self {
+            decoder: zstd::stream::raw::Decoder::new()
+                .expect("zstd-stream decoder should initialize"),
+        }
+    }
+
+    fn decode(&mut self, bytes: &[u8]) -> Result<Option<String>, String> {
+        use zstd::stream::raw::{Operation, OutBuffer};
+
+        let mut input = bytes;
+        let mut decompressed = Vec::new();
+        while !input.is_empty() {
+            let mut output = [0_u8; 8192];
+            let status = self
+                .decoder
+                .run_on_buffers(input, &mut output)
+                .map_err(|e| format!("zstd-stream decompression failed: {e}"))?;
+            decompressed.extend_from_slice(&output[..status.bytes_written]);
+            input = &input[status.bytes_read..];
+
+            if status.bytes_read == 0 && status.bytes_written == 0 {
+                break;
+            }
+        }
+
+        loop {
+            let mut output = [0_u8; 8192];
+            let mut output_buffer = OutBuffer::around(&mut output);
+            let remaining = self
+                .decoder
+                .flush(&mut output_buffer)
+                .map_err(|e| format!("zstd-stream flush failed: {e}"))?;
+            let written = output_buffer.pos();
+            decompressed.extend_from_slice(&output[..written]);
+            if remaining == 0 || written == 0 {
+                break;
+            }
+        }
+
+        if decompressed.is_empty() {
+            return Ok(None);
+        }
+
+        String::from_utf8(decompressed)
+            .map(Some)
+            .map_err(|e| format!("zstd-stream payload was not valid UTF-8: {e}"))
+    }
+}
+
+impl GatewayZlibStream {
+    fn new() -> Self {
+        Self {
+            decoder: Decompress::new(true),
+            pending: Vec::new(),
+        }
+    }
+
+    fn decode(&mut self, bytes: &[u8]) -> Result<Option<String>, String> {
+        let mut input = bytes;
+        loop {
+            let input_before = self.decoder.total_in();
+            let output_before = self.decoder.total_out();
+            let mut output = [0_u8; 8192];
+            self.decoder
+                .decompress(input, &mut output, FlushDecompress::Sync)
+                .map_err(|e| format!("zlib-stream decompression failed: {e}"))?;
+
+            let consumed = (self.decoder.total_in() - input_before) as usize;
+            let produced = (self.decoder.total_out() - output_before) as usize;
+            self.pending.extend_from_slice(&output[..produced]);
+
+            if consumed == 0 && produced == 0 {
+                break;
+            }
+            input = &input[consumed..];
+            if input.is_empty() {
+                break;
+            }
+        }
+
+        if !bytes.ends_with(ZLIB_SUFFIX) {
+            return Ok(None);
+        }
+
+        let decompressed = std::mem::take(&mut self.pending);
+        String::from_utf8(decompressed)
+            .map(Some)
+            .map_err(|e| format!("zlib-stream payload was not valid UTF-8: {e}"))
     }
 }
 
@@ -531,23 +818,49 @@ impl GatewayClient {
 
 #[cfg(test)]
 mod tests {
+    use std::io::Write;
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
 
     use super::{
-        identify_payload, initial_heartbeat_delay, is_terminal_close_code, is_terminal_close_frame,
-        recv_control_command, resume_payload, terminal_close_error, voice_state_update_payload,
-        EventCallback, GatewayClient, GatewayCommand, ReconnectAction,
+        classify_gateway_command, identify_payload, initial_heartbeat_delay,
+        is_terminal_close_code, is_terminal_close_frame, recv_control_command,
+        request_guild_members_payload, resume_payload, terminal_close_error,
+        update_presence_payload, voice_state_update_payload, EventCallback, GatewayClient,
+        GatewayCommand, GatewayCommandClass, GatewayCompressionDecoder, GatewayOutboundLimiter,
+        GatewayZlibStream, ReconnectAction, GATEWAY_COMMAND_MIN_SPACING, PRESENCE_UPDATE_LIMIT,
+        PRESENCE_UPDATE_WINDOW, ZLIB_SUFFIX,
     };
-    use crate::model::Snowflake;
+    use crate::model::{RequestGuildMembers, Snowflake, UpdatePresence};
     #[cfg(feature = "sharding")]
     use crate::sharding::{ShardRuntimeState, ShardSupervisorEvent};
-    use crate::ws::GatewayConnectionConfig;
+    use crate::ws::{GatewayCompression, GatewayConnectionConfig};
+    use flate2::{write::ZlibEncoder, Compression};
     use futures_util::{SinkExt, StreamExt};
     use tokio::net::TcpListener;
     use tokio::sync::mpsc;
+    use tokio::time::Instant;
     use tokio_tungstenite::tungstenite::protocol::{frame::coding::CloseCode, CloseFrame};
     use tokio_tungstenite::{accept_async, tungstenite::Message as WsMessage};
+
+    fn compress_gateway_payloads(payloads: &[&str]) -> Vec<Vec<u8>> {
+        let mut encoder = ZlibEncoder::new(Vec::new(), Compression::default());
+        let mut emitted = 0;
+
+        payloads
+            .iter()
+            .map(|payload| {
+                encoder
+                    .write_all(payload.as_bytes())
+                    .expect("write gateway payload");
+                encoder.flush().expect("flush gateway payload");
+                let stream = encoder.get_ref();
+                let chunk = stream[emitted..].to_vec();
+                emitted = stream.len();
+                chunk
+            })
+            .collect()
+    }
 
     #[test]
     fn normalize_gateway_url_adds_missing_gateway_query() {
@@ -594,6 +907,180 @@ mod tests {
     }
 
     #[test]
+    fn gateway_typed_presence_and_member_request_payloads_match_gateway_shape() {
+        let presence = UpdatePresence::online_with_activity("busy");
+        let payload = update_presence_payload(presence);
+        assert_eq!(payload["op"], serde_json::json!(3));
+        assert_eq!(payload["d"]["status"], serde_json::json!("online"));
+        assert_eq!(
+            payload["d"]["activities"][0]["name"],
+            serde_json::json!("busy")
+        );
+
+        let payload = request_guild_members_payload(RequestGuildMembers {
+            guild_id: Snowflake::from("1"),
+            query: Some("abc".to_string()),
+            limit: Some(10),
+            presences: Some(true),
+            user_ids: Some(vec![Snowflake::from("2")]),
+            nonce: Some("nonce".to_string()),
+        });
+        assert_eq!(payload["op"], serde_json::json!(8));
+        assert_eq!(payload["d"]["guild_id"], serde_json::json!("1"));
+        assert_eq!(payload["d"]["user_ids"], serde_json::json!(["2"]));
+        assert_eq!(payload["d"]["nonce"], serde_json::json!("nonce"));
+    }
+
+    #[test]
+    fn gateway_command_classifier_routes_raw_payloads_through_limiter_buckets() {
+        assert_eq!(
+            classify_gateway_command(&GatewayCommand::UpdatePresence("online".into())),
+            GatewayCommandClass::PresenceUpdate
+        );
+        assert_eq!(
+            classify_gateway_command(&GatewayCommand::UpdatePresenceData(
+                UpdatePresence::online_with_activity("online")
+            )),
+            GatewayCommandClass::PresenceUpdate
+        );
+        assert_eq!(
+            classify_gateway_command(&GatewayCommand::RequestGuildMembers(RequestGuildMembers {
+                guild_id: Snowflake::from("1"),
+                query: None,
+                limit: Some(0),
+                presences: None,
+                user_ids: None,
+                nonce: None,
+            })),
+            GatewayCommandClass::BurstSensitive
+        );
+        assert_eq!(
+            classify_gateway_command(&GatewayCommand::SendPayload(serde_json::json!({ "op": 3 }))),
+            GatewayCommandClass::PresenceUpdate
+        );
+        assert_eq!(
+            classify_gateway_command(&GatewayCommand::SendPayload(serde_json::json!({ "op": 8 }))),
+            GatewayCommandClass::BurstSensitive
+        );
+        assert_eq!(
+            classify_gateway_command(&GatewayCommand::SendPayload(
+                serde_json::json!({ "op": 99 })
+            )),
+            GatewayCommandClass::Other
+        );
+    }
+
+    #[test]
+    fn gateway_outbound_limiter_applies_presence_window_and_burst_spacing() {
+        let mut limiter = GatewayOutboundLimiter::default();
+        let now = Instant::now();
+        let presence = GatewayCommand::UpdatePresence("online".into());
+
+        for offset in 0..PRESENCE_UPDATE_LIMIT {
+            assert_eq!(
+                limiter.reserve_delay(&presence, now + Duration::from_secs(offset as u64)),
+                None
+            );
+        }
+        assert!(limiter
+            .reserve_delay(
+                &presence,
+                now + PRESENCE_UPDATE_WINDOW - Duration::from_millis(1)
+            )
+            .is_some());
+        assert_eq!(
+            limiter.reserve_delay(&presence, now + PRESENCE_UPDATE_WINDOW),
+            None
+        );
+
+        let mut limiter = GatewayOutboundLimiter::default();
+        let request_members = GatewayCommand::SendPayload(serde_json::json!({ "op": 8 }));
+        assert_eq!(limiter.reserve_delay(&request_members, now), None);
+        assert_eq!(
+            limiter.reserve_delay(
+                &request_members,
+                now + GATEWAY_COMMAND_MIN_SPACING - Duration::from_millis(1)
+            ),
+            Some(Duration::from_millis(1))
+        );
+        assert_eq!(
+            limiter.reserve_delay(&request_members, now + GATEWAY_COMMAND_MIN_SPACING),
+            None
+        );
+    }
+
+    #[test]
+    fn zlib_stream_decoder_waits_for_gateway_suffix() {
+        let compressed = compress_gateway_payloads(&[r#"{"op":11,"d":null}"#])
+            .pop()
+            .expect("compressed payload");
+        assert!(compressed.ends_with(ZLIB_SUFFIX));
+
+        let split_at = compressed.len() - ZLIB_SUFFIX.len();
+        let mut decoder = GatewayZlibStream::new();
+        assert_eq!(
+            decoder
+                .decode(&compressed[..split_at])
+                .expect("partial decode"),
+            None
+        );
+
+        assert_eq!(
+            decoder
+                .decode(&compressed[split_at..])
+                .expect("complete decode")
+                .as_deref(),
+            Some(r#"{"op":11,"d":null}"#)
+        );
+    }
+
+    #[test]
+    fn zlib_stream_decoder_keeps_state_across_payloads() {
+        let payloads = compress_gateway_payloads(&[
+            r#"{"op":0,"t":"READY","s":1,"d":{}}"#,
+            r#"{"op":0,"t":"MESSAGE_CREATE","s":2,"d":{}}"#,
+        ]);
+        let mut decoder = GatewayZlibStream::new();
+
+        assert_eq!(
+            decoder
+                .decode(&payloads[0])
+                .expect("first stream payload")
+                .as_deref(),
+            Some(r#"{"op":0,"t":"READY","s":1,"d":{}}"#)
+        );
+        assert_eq!(
+            decoder
+                .decode(&payloads[1])
+                .expect("second stream payload")
+                .as_deref(),
+            Some(r#"{"op":0,"t":"MESSAGE_CREATE","s":2,"d":{}}"#)
+        );
+    }
+
+    #[cfg(feature = "zstd-stream")]
+    #[test]
+    fn zstd_stream_decoder_decodes_gateway_payloads() {
+        let first = zstd::stream::encode_all(r#"{"op":0,"t":"READY","s":1,"d":{}}"#.as_bytes(), 0)
+            .expect("zstd payload");
+        let second = zstd::stream::encode_all(
+            r#"{"op":0,"t":"MESSAGE_CREATE","s":2,"d":{}}"#.as_bytes(),
+            0,
+        )
+        .expect("zstd payload");
+        let mut decoder = GatewayCompressionDecoder::new(Some(GatewayCompression::ZstdStream));
+
+        assert_eq!(
+            decoder.decode(&first).expect("first payload").as_deref(),
+            Some(r#"{"op":0,"t":"READY","s":1,"d":{}}"#)
+        );
+        assert_eq!(
+            decoder.decode(&second).expect("second payload").as_deref(),
+            Some(r#"{"op":0,"t":"MESSAGE_CREATE","s":2,"d":{}}"#)
+        );
+    }
+
+    #[test]
     fn initial_heartbeat_delay_uses_only_jitter_fraction() {
         assert_eq!(
             initial_heartbeat_delay(1_000, 0.0),
@@ -611,7 +1098,7 @@ mod tests {
 
     #[test]
     fn identify_and_resume_payloads_use_raw_gateway_token() {
-        let identify = identify_payload("secret-token", 513, Some([2, 4]));
+        let identify = identify_payload("secret-token", 513, Some([2, 4]), true);
         let resume = resume_payload("secret-token", "session", 42);
 
         assert_eq!(identify["d"]["token"], serde_json::json!("secret-token"));
@@ -620,13 +1107,21 @@ mod tests {
 
     #[test]
     fn identify_without_shard_and_resume_without_sequence_keep_expected_shape() {
-        let identify = identify_payload("secret-token", 513, None);
+        let identify = identify_payload("secret-token", 513, None, true);
         let resume = resume_payload("secret-token", "session", 0);
 
         assert!(identify["d"].get("shard").is_none());
         assert_eq!(identify["d"]["intents"], serde_json::json!(513));
+        assert_eq!(identify["d"]["compress"], serde_json::json!(true));
         assert_eq!(resume["d"]["session_id"], serde_json::json!("session"));
         assert!(resume["d"]["seq"].is_null());
+    }
+
+    #[test]
+    fn identify_payload_omits_payload_compression_for_transport_compression() {
+        let identify = identify_payload("secret-token", 513, None, false);
+
+        assert!(identify["d"].get("compress").is_none());
     }
 
     #[test]

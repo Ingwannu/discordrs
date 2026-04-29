@@ -89,8 +89,16 @@ impl ButtonBuilder {
         self
     }
 
+    pub fn build_typed(self) -> Self {
+        self.normalize()
+    }
+
+    pub fn build_value(self) -> Value {
+        to_json_value(self.build_typed())
+    }
+
     pub fn build(self) -> Value {
-        to_json_value(self.normalize())
+        self.build_value()
     }
 }
 
@@ -137,8 +145,16 @@ impl ActionRowBuilder {
         self
     }
 
+    pub fn build_typed(self) -> Self {
+        self
+    }
+
+    pub fn build_value(self) -> Value {
+        to_json_value(self.build_typed())
+    }
+
     pub fn build(self) -> Value {
-        to_json_value(self)
+        self.build_value()
     }
 }
 
@@ -278,8 +294,16 @@ impl SelectMenuBuilder {
         self
     }
 
+    pub fn build_typed(self) -> Self {
+        self.normalize()
+    }
+
+    pub fn build_value(self) -> Value {
+        to_json_value(self.build_typed())
+    }
+
     pub fn build(self) -> Value {
-        to_json_value(self.normalize())
+        self.build_value()
     }
 }
 
@@ -402,6 +426,31 @@ mod tests {
             Some(button_style::PRIMARY as u64)
         );
         assert!(payload.get("url").is_none());
+    }
+
+    #[test]
+    fn component_build_typed_preserves_structs_before_json_conversion() {
+        let button = ButtonBuilder::new()
+            .url("https://example.com")
+            .custom_id("next")
+            .build_typed();
+        assert_eq!(button.custom_id.as_deref(), Some("next"));
+        assert_eq!(button.url, None);
+        assert_eq!(button.style, button_style::PRIMARY);
+
+        let select = SelectMenuBuilder::channel("channels")
+            .add_option(SelectOption::new("Ignored", "ignored"))
+            .channel_types(vec![0, 2])
+            .build_typed();
+        assert!(select.options.is_empty());
+        assert_eq!(select.channel_types, Some(vec![0, 2]));
+
+        let row = ActionRowBuilder::new()
+            .add_component(json!({ "type": 99 }))
+            .id(42)
+            .build_typed();
+        assert_eq!(row.id, Some(42));
+        assert_eq!(row.components.len(), 1);
     }
 
     #[test]

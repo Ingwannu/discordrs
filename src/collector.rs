@@ -66,6 +66,7 @@ pub struct MessageCollector {
     receiver: broadcast::Receiver<Event>,
     filter: Option<EventFilter<Message>>,
     timeout: Option<Duration>,
+    deadline: Option<time::Instant>,
     max_items: Option<usize>,
     lagged_events: u64,
 }
@@ -77,6 +78,7 @@ impl MessageCollector {
             receiver,
             filter: None,
             timeout: None,
+            deadline: None,
             max_items: None,
             lagged_events: 0,
         }
@@ -105,7 +107,8 @@ impl MessageCollector {
     }
 
     pub async fn next(&mut self) -> Option<Message> {
-        recv_with_timeout(self.timeout, async {
+        let timeout = remaining_timeout(self.timeout, &mut self.deadline);
+        recv_with_timeout(timeout, async {
             loop {
                 match self.receiver.recv().await {
                     Ok(Event::MessageCreate(event)) | Ok(Event::MessageUpdate(event)) => {
@@ -148,6 +151,7 @@ pub struct InteractionCollector {
     receiver: broadcast::Receiver<Event>,
     filter: Option<EventFilter<Interaction>>,
     timeout: Option<Duration>,
+    deadline: Option<time::Instant>,
     max_items: Option<usize>,
     lagged_events: u64,
 }
@@ -159,6 +163,7 @@ impl InteractionCollector {
             receiver,
             filter: None,
             timeout: None,
+            deadline: None,
             max_items: None,
             lagged_events: 0,
         }
@@ -187,7 +192,8 @@ impl InteractionCollector {
     }
 
     pub async fn next(&mut self) -> Option<Interaction> {
-        recv_with_timeout(self.timeout, async {
+        let timeout = remaining_timeout(self.timeout, &mut self.deadline);
+        recv_with_timeout(timeout, async {
             loop {
                 match self.receiver.recv().await {
                     Ok(Event::InteractionCreate(event)) => {
@@ -209,6 +215,19 @@ impl InteractionCollector {
             }
         })
         .await
+    }
+
+    pub async fn collect(mut self) -> Vec<Interaction> {
+        let mut interactions = Vec::new();
+        while let Some(interaction) = self.next().await {
+            interactions.push(interaction);
+            if let Some(max_items) = self.max_items {
+                if interactions.len() >= max_items {
+                    break;
+                }
+            }
+        }
+        interactions
     }
 }
 
@@ -234,6 +253,11 @@ impl ComponentCollector {
         self.inner.lagged_events()
     }
 
+    pub fn max_items(mut self, max_items: usize) -> Self {
+        self.inner = self.inner.max_items(max_items);
+        self
+    }
+
     pub async fn next(&mut self) -> Option<ComponentInteraction> {
         while let Some(interaction) = self.inner.next().await {
             if let Interaction::Component(component) = interaction {
@@ -241,6 +265,19 @@ impl ComponentCollector {
             }
         }
         None
+    }
+
+    pub async fn collect(mut self) -> Vec<ComponentInteraction> {
+        let mut components = Vec::new();
+        while let Some(component) = self.next().await {
+            components.push(component);
+            if let Some(max_items) = self.inner.max_items {
+                if components.len() >= max_items {
+                    break;
+                }
+            }
+        }
+        components
     }
 }
 
@@ -266,6 +303,11 @@ impl ModalCollector {
         self.inner.lagged_events()
     }
 
+    pub fn max_items(mut self, max_items: usize) -> Self {
+        self.inner = self.inner.max_items(max_items);
+        self
+    }
+
     pub async fn next(&mut self) -> Option<ModalSubmitInteraction> {
         while let Some(interaction) = self.inner.next().await {
             if let Interaction::ModalSubmit(modal) = interaction {
@@ -274,6 +316,30 @@ impl ModalCollector {
         }
         None
     }
+
+    pub async fn collect(mut self) -> Vec<ModalSubmitInteraction> {
+        let mut modals = Vec::new();
+        while let Some(modal) = self.next().await {
+            modals.push(modal);
+            if let Some(max_items) = self.inner.max_items {
+                if modals.len() >= max_items {
+                    break;
+                }
+            }
+        }
+        modals
+    }
+}
+
+#[cfg(feature = "collectors")]
+fn remaining_timeout(
+    timeout_duration: Option<Duration>,
+    deadline: &mut Option<time::Instant>,
+) -> Option<Duration> {
+    let duration = timeout_duration?;
+    let now = time::Instant::now();
+    let deadline = *deadline.get_or_insert(now + duration);
+    Some(deadline.saturating_duration_since(now))
 }
 
 #[cfg(feature = "collectors")]
@@ -293,6 +359,7 @@ mod tests {
 
     use serde_json::json;
     use serde_json::Value;
+    use tokio::time;
 
     use crate::event::decode_event;
     use crate::model::Interaction;
@@ -492,6 +559,43 @@ mod tests {
             }
             other => panic!("unexpected interaction after filter skip: {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn interaction_collector_collect_stops_at_max_items() {
+        let hub = CollectorHub::new();
+        let collector = hub
+            .interaction_collector()
+            .max_items(2)
+            .timeout(Duration::from_secs(1));
+
+        hub.publish(component_interaction("1", "first"));
+        hub.publish(component_interaction("2", "second"));
+        hub.publish(component_interaction("3", "third"));
+
+        let interactions = collector.collect().await;
+        assert_eq!(interactions.len(), 2);
+        assert_eq!(interactions[0].id().as_str(), "1");
+        assert_eq!(interactions[1].id().as_str(), "2");
+    }
+
+    #[tokio::test]
+    async fn component_collector_timeout_is_absolute_across_non_matching_interactions() {
+        let hub = CollectorHub::new();
+        let mut collector = hub.component_collector().timeout(Duration::from_millis(30));
+        let publisher = hub.clone();
+
+        tokio::spawn(async move {
+            for id in 0..20 {
+                publisher.publish(ping_interaction(&id.to_string()));
+                time::sleep(Duration::from_millis(10)).await;
+            }
+        });
+
+        let result = time::timeout(Duration::from_millis(120), collector.next())
+            .await
+            .expect("collector timeout should not reset for every non-component interaction");
+        assert!(result.is_none());
     }
 
     #[tokio::test]

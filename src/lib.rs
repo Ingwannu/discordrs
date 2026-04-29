@@ -1,4 +1,4 @@
-//! discordrs - Standalone Discord bot framework with Components V2, Gateway, and HTTP client
+//! discord.rs - Standalone Discord bot framework with Components V2, Gateway, and HTTP client
 //!
 //! # Features
 //! - `gateway` - Gateway WebSocket client, BotClient, EventHandler
@@ -18,6 +18,7 @@ pub mod helpers;
 pub mod http;
 pub mod manager;
 pub mod model;
+pub mod oauth2;
 pub mod parsers;
 pub mod prelude;
 pub mod response;
@@ -38,28 +39,55 @@ pub mod gateway;
 pub mod interactions;
 
 pub use cache::{
-    CacheHandle, ChannelManager, GuildManager, MemberManager, MessageManager, RoleManager,
+    CacheConfig, CacheHandle, ChannelManager, GuildManager, MemberManager, MessageManager,
+    RoleManager, UserManager,
 };
 pub use collection::Collection;
 pub use command::{
     command_type, option_type, CommandDefinition, CommandOptionBuilder, MessageCommandBuilder,
-    SlashCommandBuilder, UserCommandBuilder,
+    PrimaryEntryPointCommandBuilder, SlashCommandBuilder, UserCommandBuilder,
 };
 pub use error::{DiscordError, HttpError};
 pub use event::{
-    decode_event, ChannelEvent, Event, GuildDeleteEvent, GuildDeletePayload, GuildEvent,
+    decode_event, AuditLogEntryEvent, AutoModerationEvent, ChannelEvent, EntitlementEvent, Event,
+    GuildDeleteEvent, GuildDeletePayload, GuildEvent, GuildMembersChunkEvent,
+    GuildMembersChunkPayload, GuildScheduledEventUserEvent, GuildStickersUpdateEvent,
     InteractionEvent, MemberEvent, MemberRemoveEvent, MemberRemovePayload, MessageDeleteEvent,
-    MessageDeletePayload, MessageEvent, ReadyEvent, ReadyPayload, RoleDeleteEvent,
-    RoleDeletePayload, RoleEvent, VoiceServerEvent, VoiceStateEvent,
+    MessageDeletePayload, MessageEvent, ReactionRemoveEmojiEvent, ReadyEvent, ReadyPayload,
+    ResumedEvent, RoleDeleteEvent, RoleDeletePayload, RoleEvent, ScheduledEvent,
+    SoundboardSoundDeleteEvent, SoundboardSoundEvent, SoundboardSoundsEvent, StageInstanceEvent,
+    ThreadEvent, ThreadListSyncEvent, ThreadMemberUpdateEvent, ThreadMembersUpdateEvent,
+    UserUpdateEvent, VoiceChannelEffectEvent, VoiceChannelStartTimeUpdateEvent,
+    VoiceChannelStatusUpdateEvent, VoiceServerEvent, VoiceStateEvent,
 };
 pub use manager::CachedManager;
 pub use model::{
-    ApplicationCommand, ApplicationCommandOption, ApplicationCommandOptionChoice, Attachment,
-    AutocompleteInteraction, Channel, ChatInputCommandInteraction, CommandInteractionData,
-    CommandInteractionOption, ComponentInteraction, CreateDmChannel, CreateMessage, DiscordModel,
-    GatewayBot, Guild, Interaction, InteractionCallbackResponse, InteractionContextData, Member,
-    Message, MessageContextMenuInteraction, ModalSubmitInteraction, PermissionsBitField, Role,
-    SessionStartLimit, Snowflake, User, UserContextMenuInteraction, VoiceServerUpdate, VoiceState,
+    Activity, ActivityAssets, ActivityButton, ActivityParty, ActivitySecrets, ActivityTimestamps,
+    ActivityType, Application, ApplicationCommand, ApplicationCommandHandlerType,
+    ApplicationCommandOption, ApplicationCommandOptionChoice, ApplicationIntegrationType,
+    ApplicationRoleConnectionMetadata, ArchivedThreadsQuery, Attachment, AuditLogEntry,
+    AutoModerationAction, AutoModerationActionMetadata, AutoModerationRule,
+    AutoModerationTriggerMetadata, AutocompleteInteraction, Ban, BulkGuildBanRequest,
+    BulkGuildBanResponse, Channel, ChannelMention, ChatInputCommandInteraction,
+    CommandInteractionData, CommandInteractionOption, ComponentInteraction, CreateDmChannel,
+    CreateMessage, CreatePoll, CreateTestEntitlement, CurrentUserGuild, DefaultReaction,
+    DiscordModel, Embed, Entitlement, EntitlementQuery, FollowedChannel, ForumTag, GatewayBot,
+    Guild, GuildOnboarding, GuildPreview, GuildPruneCount, GuildPruneResult, GuildScheduledEvent,
+    GuildScheduledEventEntityMetadata, GuildScheduledEventRecurrenceRule,
+    GuildScheduledEventRecurrenceRuleNWeekday, GuildScheduledEventUser, GuildTemplate,
+    GuildWidgetSettings, Integration, IntegrationAccount, IntegrationApplication, Interaction,
+    InteractionCallbackResponse, InteractionContextData, InteractionContextType, Invite,
+    JoinedArchivedThreadsQuery, Member, Message, MessageContextMenuInteraction, MessageReference,
+    ModalSubmitInteraction, PermissionOverwrite, PermissionsBitField, Poll, PollAnswer,
+    PollAnswerCount, PollAnswerVoters, PollMedia, PollResults, RequestGuildMembers, Role, RoleTags,
+    Sku, Snowflake, SoundboardSound, SoundboardSoundList, StageInstance, Sticker, StickerItem,
+    StickerPack, StickerPackList, Subscription, SubscriptionQuery, ThreadListResponse,
+    ThreadMember, ThreadMemberQuery, UpdatePresence, User, UserContextMenuInteraction, VanityUrl,
+    VoiceRegion, VoiceServerUpdate, VoiceState, Webhook, WelcomeScreen, WelcomeScreenChannel,
+};
+pub use oauth2::{
+    OAuth2AuthorizationRequest, OAuth2Client, OAuth2CodeExchange, OAuth2RefreshToken, OAuth2Scope,
+    OAuth2TokenResponse,
 };
 pub use response::{InteractionResponseBuilder, MessageBuilder};
 #[cfg(feature = "sharding")]
@@ -85,9 +113,16 @@ pub use voice::{
 };
 #[cfg(feature = "voice")]
 pub use voice_runtime::{
-    connect as connect_voice_runtime, VoiceRuntimeConfig, VoiceRuntimeHandle, VoiceRuntimeState,
-    VoiceSessionDescription,
+    connect as connect_voice_runtime, VoiceDaveFrame, VoiceDaveFrameDecryptor, VoiceDaveState,
+    VoiceDaveUnencryptedRange, VoiceDecodedPacket, VoiceOpusDecoder, VoiceOpusFrame,
+    VoiceOutboundPacket, VoiceOutboundRtpState, VoiceRawUdpPacket, VoiceReceivedPacket,
+    VoiceRtpHeader, VoiceRuntimeConfig, VoiceRuntimeHandle, VoiceRuntimeState,
+    VoiceSessionDescription, VoiceSpeakingUpdate,
 };
+#[cfg(all(feature = "voice", feature = "voice-encode"))]
+pub use voice_runtime::{AudioMixer, AudioSource, PcmFrame, VoiceOpusEncoder};
+#[cfg(all(feature = "voice", feature = "dave"))]
+pub use voice_runtime::{VoiceDaveFrameEncryptor, VoiceDaveyDecryptor, VoiceDaveySession};
 #[cfg(any(feature = "gateway", feature = "sharding"))]
 pub use ws::{GatewayCompression, GatewayConnectionConfig, GatewayEncoding};
 
@@ -113,13 +148,14 @@ pub use http::{DiscordHttpClient, RestClient};
 
 pub use helpers::{
     defer_and_followup_container, defer_interaction, defer_update_interaction,
-    delete_followup_response, delete_original_response, edit_message_with_container,
-    edit_original_response, followup_message, followup_with_container, get_original_response,
-    launch_activity, respond_component_with_components_v2, respond_component_with_container,
-    respond_modal_with_container, respond_to_interaction, respond_with_autocomplete_choices,
-    respond_with_components_v2, respond_with_container, respond_with_message, respond_with_modal,
-    respond_with_modal_typed, send_components_v2, send_container_message, send_message,
-    send_to_channel, update_component_with_container, update_interaction_message,
+    delete_followup_response, delete_original_response, edit_followup_response,
+    edit_message_with_container, edit_original_response, followup_message, followup_with_container,
+    get_original_response, launch_activity, respond_component_with_components_v2,
+    respond_component_with_container, respond_modal_with_container, respond_to_interaction,
+    respond_with_autocomplete_choices, respond_with_components_v2, respond_with_container,
+    respond_with_message, respond_with_modal, respond_with_modal_typed, send_components_v2,
+    send_container_message, send_message, send_to_channel, update_component_with_container,
+    update_interaction_message,
 };
 
 #[cfg(all(feature = "gateway", feature = "sharding"))]

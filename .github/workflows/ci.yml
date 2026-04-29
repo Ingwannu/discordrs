@@ -15,8 +15,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  COVERAGE_MIN_LINES: 99.9
-  COVERAGE_IGNORE_REGEX: '(^|[/\\])src[/\\](cache|collection|collector|command|error|event|helpers|http|interactions|manager|model|response|sharding|voice|voice_runtime|ws)\.rs$|(^|[/\\])src[/\\]gateway[/\\].*\.rs$|(^|[/\\])src[/\\]parsers[/\\].*\.rs$|(^|[/\\])src[/\\]builders[/\\](components|container|embed|mod)\.rs$'
+  COVERAGE_MIN_LINES: 90.0
 jobs:
   rust-check:
     name: rust-check
@@ -85,7 +84,7 @@ jobs:
         uses: taiki-e/install-action@cargo-llvm-cov
 
       - name: Generate coverage report
-        run: cargo llvm-cov --all-features --locked --lcov --output-path lcov.info --ignore-filename-regex "${{ env.COVERAGE_IGNORE_REGEX }}" --fail-under-lines ${{ env.COVERAGE_MIN_LINES }}
+        run: cargo llvm-cov --all-features --locked --lcov --output-path lcov.info --fail-under-lines ${{ env.COVERAGE_MIN_LINES }}
 
       - name: Upload LCOV artifact
         uses: actions/upload-artifact@v4

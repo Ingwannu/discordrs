@@ -1,6 +1,8 @@
-# discordrs Usage
+﻿# discord.rs Usage
 
-`discordrs` is a standalone Rust Discord framework with typed models, typed gateway events, command builders, Components V2 builders, REST helpers, cache managers, collectors, sharding control, and voice runtime foundations.
+`discord.rs` is a standalone Rust Discord framework with typed models, typed gateway events, command builders, Components V2 builders, REST helpers, cache managers, collectors, sharding control, and voice runtime foundations.
+
+Brand name: discord.rs. The crates.io package name and Rust import path remain `discordrs`.
 
 ## 1. Installation
 
@@ -9,28 +11,37 @@ Pick features based on the runtime surface you want to ship.
 ```toml
 [dependencies]
 # Core only: models, builders, parsers, helpers, REST client
-discordrs = "1.0.0"
+discordrs = "1.2.0"
 
 # Gateway runtime
-discordrs = { version = "1.0.0", features = ["gateway"] }
+discordrs = { version = "1.2.0", features = ["gateway"] }
 
 # HTTP interactions endpoint
-discordrs = { version = "1.0.0", features = ["interactions"] }
+discordrs = { version = "1.2.0", features = ["interactions"] }
 
 # Gateway runtime with cache storage enabled
-discordrs = { version = "1.0.0", features = ["gateway", "cache"] }
+discordrs = { version = "1.2.0", features = ["gateway", "cache"] }
 
 # Gateway runtime with collectors
-discordrs = { version = "1.0.0", features = ["gateway", "collectors"] }
+discordrs = { version = "1.2.0", features = ["gateway", "collectors"] }
 
 # Gateway runtime with shard supervisor and shard status APIs
-discordrs = { version = "1.0.0", features = ["gateway", "sharding"] }
+discordrs = { version = "1.2.0", features = ["gateway", "sharding"] }
 
 # Voice manager plus voice gateway/UDP runtime
-discordrs = { version = "1.0.0", features = ["voice"] }
+discordrs = { version = "1.2.0", features = ["voice"] }
+
+# PCM source/mixer plus Opus encoder playback
+discordrs = { version = "1.2.0", features = ["voice", "voice-encode"] }
+
+# Experimental DAVE/MLS receive and outbound media hooks
+discordrs = { version = "1.2.0", features = ["voice", "dave"] }
 
 # Gateway runtime with voice helpers
-discordrs = { version = "1.0.0", features = ["gateway", "voice"] }
+discordrs = { version = "1.2.0", features = ["gateway", "voice"] }
+
+# Gateway runtime with zstd-stream transport compression
+discordrs = { version = "1.2.0", features = ["gateway", "zstd-stream"] }
 ```
 
 If you want the common runtime helpers in one import, prefer:
@@ -159,12 +170,45 @@ async fn register(http: &DiscordHttpClient) -> Result<(), discordrs::DiscordErro
 }
 ```
 
+## 4.5 OAuth2 Backend Helpers
+
+Use `OAuth2Client` for application backend OAuth2 flows. It is separate from `RestClient` because OAuth2 token endpoints use form-encoded application credentials, not bot-token `Authorization`.
+
+```rust
+use discordrs::{
+    OAuth2AuthorizationRequest, OAuth2Client, OAuth2CodeExchange, OAuth2Scope,
+};
+
+async fn oauth_flow() -> Result<(), discordrs::DiscordError> {
+    let oauth = OAuth2Client::new("client_id", "client_secret");
+    let authorize_url = oauth.authorization_url(
+        OAuth2AuthorizationRequest::code(
+            "https://app.example/callback",
+            [OAuth2Scope::identify(), OAuth2Scope::guilds()],
+        )
+        .state("csrf-token")
+        .prompt("consent"),
+    )?;
+
+    println!("Open: {authorize_url}");
+
+    let token = oauth
+        .exchange_code(OAuth2CodeExchange::new(
+            "returned-code",
+            "https://app.example/callback",
+        ))
+        .await?;
+    println!("OAuth token type: {}", token.token_type);
+    Ok(())
+}
+```
+
 ## 5. Send Messages with Typed Helpers
 
 If you want a typed message body instead of hand-written JSON, use `MessageBuilder` and `send_message`.
 
 ```rust
-use discordrs::{send_message, ButtonConfig, MessageBuilder, button_style};
+use discordrs::{send_message, ActionRowBuilder, ButtonBuilder, MessageBuilder, button_style};
 
 async fn send_panel(
     http: &discordrs::DiscordHttpClient,
@@ -172,10 +216,16 @@ async fn send_panel(
 ) -> Result<(), discordrs::DiscordError> {
     let message = MessageBuilder::new()
         .content("Support panel")
-        .button(
-            ButtonConfig::new("ticket_open", "Open Ticket")
-                .style(button_style::PRIMARY),
-        );
+        .components(vec![
+            ActionRowBuilder::new()
+                .add_button(
+                    ButtonBuilder::new()
+                        .custom_id("ticket_open")
+                        .label("Open Ticket")
+                        .style(button_style::PRIMARY),
+                )
+                .build(),
+        ]);
 
     send_message(http, channel_id, message.build()).await?;
     Ok(())
@@ -309,6 +359,23 @@ async fn inspect_cache(ctx: &discordrs::Context) {
 }
 ```
 
+For long-running bots, create bounded cache handles instead of keeping every cached entity forever:
+
+```rust
+use std::time::Duration;
+use discordrs::{CacheConfig, CacheHandle};
+
+let cache = CacheHandle::with_config(
+    CacheConfig::unbounded()
+        .max_messages_per_channel(100)
+        .max_total_messages(10_000)
+        .message_ttl(Duration::from_secs(60 * 60))
+        .presence_ttl(Duration::from_secs(10 * 60))
+        .max_presences(50_000)
+        .max_members_per_guild(25_000),
+);
+```
+
 ## 9. Control the Active Shard from `Context`
 
 When you are inside a gateway handler, `Context` can drive shard-local gateway actions directly.
@@ -412,7 +479,11 @@ async fn join_and_prepare_voice(ctx: &discordrs::Context) -> Result<(), discordr
 If you already have a full runtime config, connect directly:
 
 ```rust
-use discordrs::{connect_voice_runtime, VoiceRuntimeConfig, VoiceSpeakingFlags};
+use std::time::Duration;
+
+use discordrs::{
+    connect_voice_runtime, VoiceOpusDecoder, VoiceOpusFrame, VoiceRuntimeConfig, VoiceSpeakingFlags,
+};
 
 async fn connect_runtime() -> Result<(), discordrs::DiscordError> {
     let handle = connect_voice_runtime(VoiceRuntimeConfig::new(
@@ -425,6 +496,20 @@ async fn connect_runtime() -> Result<(), discordrs::DiscordError> {
     .await?;
 
     handle.set_speaking(VoiceSpeakingFlags::MICROPHONE, 0)?;
+    handle
+        .send_opus_frame(&[0xf8, 0xff, 0xfe], Duration::from_millis(20))
+        .await?;
+    handle
+        .play_opus_frames([VoiceOpusFrame::new([0xf8, 0xff, 0xfe])])
+        .await?;
+
+    let mut decoder = VoiceOpusDecoder::discord_default()?;
+    let packet = handle.recv_decoded_voice_packet(&mut decoder, 2048).await?;
+    println!(
+        "received {} samples/channel from SSRC {}",
+        packet.samples_per_channel,
+        packet.packet.rtp.ssrc
+    );
     handle.close().await?;
     Ok(())
 }
@@ -438,9 +523,22 @@ The current runtime covers:
 - select protocol
 - session description wait
 - speaking updates
+- server speaking/SSRC-to-user tracking when the voice gateway sends that mapping
+- Opus-frame RTP send with sequence/timestamp/nonce management
+- simple paced Opus-frame playback through `play_opus_frames(...)`
+- 48 kHz stereo 20 ms PCM encode/playback through `PcmFrame`, `AudioSource`, `AudioMixer`, and `VoiceOpusEncoder` when `voice-encode` is enabled
+- raw UDP packet receive
+- RTP header parsing with CSRC/extension-aware RTP-size header calculation
+- transport decrypt for `aead_aes256_gcm_rtpsize` and `aead_xchacha20_poly1305_rtpsize`
+- pure-Rust Opus decode to interleaved `i16` PCM through `VoiceOpusDecoder`
+- DAVE opcode state tracking and a `VoiceDaveFrameDecryptor` hook
+- experimental `VoiceDaveySession`, `VoiceDaveFrameEncryptor`, `send_opus_frame_with_dave(...)`, and DAVE MLS outbound command helpers when the `dave` feature is enabled
 - graceful close
 
-It does not yet implement the full encrypted media pipeline.
+The default `voice` feature can send already-encoded Opus frames, returns transport-decrypted Opus frames, and can decode received frames to PCM.
+`recv_voice_packet(...)` still rejects active DAVE sessions unless the caller uses
+`recv_voice_packet_with_dave(...)` or `recv_decoded_voice_packet_with_dave(...)` with a DAVE decryptor.
+The `dave` feature exposes a `davey`/OpenMLS-backed session wrapper and outbound media insertion point, but live Discord DAVE interoperability still depends on validating the full gateway MLS transition lifecycle for the target voice session.
 
 ## 12. Modal and Components V2 Helpers
 
@@ -486,6 +584,16 @@ async fn handle_modal(http: &DiscordHttpClient, payload: &Value) -> Result<(), d
 - `Context::new(http, data)`
 - `Context::rest()`
 - `RestClient::new(token, application_id)`
+- `get_poll_answer_voters(...)`
+- `end_poll(...)`
+- `get_sku_subscriptions(...)`
+- `get_sku_subscription(...)`
+- `get_guild_integrations(...)`
+- `list_thread_members(...)`
+- `list_public_archived_threads(...)`
+- `list_private_archived_threads(...)`
+- `list_joined_private_archived_threads(...)`
+- `get_active_guild_threads(...)`
 - `SlashCommandBuilder`, `UserCommandBuilder`, `MessageCommandBuilder`
 - `MessageBuilder`, `InteractionResponseBuilder`
 - `send_message(...)`
@@ -503,6 +611,10 @@ async fn handle_modal(http: &DiscordHttpClient, payload: &Value) -> Result<(), d
 - `ShardSupervisor`
 - `VoiceRuntimeConfig`
 - `connect_voice_runtime(...)`
+- `VoiceOpusDecoder`
+- `VoiceOpusEncoder` with `voice,voice-encode`
+- `VoiceDaveFrameDecryptor`
+- `VoiceDaveFrameEncryptor` and `VoiceDaveySession` with `voice,dave`
 
 ## 14. Notes
 
@@ -516,7 +628,8 @@ async fn handle_modal(http: &DiscordHttpClient, payload: &Value) -> Result<(), d
 - Use `ApplicationCommand::id_opt()` until Discord has assigned an ID. Unsaved commands are no longer treated as generic `DiscordModel`s.
 - `spawn_shards(...)` is the right choice when you want status inspection, manual shutdown, or supervisor-driven shard control.
 - `start_shards(...)` is the right choice when you only want the runtime to own the shard lifecycle and block until it exits.
-- `voice` currently provides runtime handshake and state plumbing, not a full production media transport stack.
+- `voice` currently provides handshake, state plumbing, raw UDP receive, transport-decrypted Opus frames, Opus send, and PCM decode. `voice-encode` adds PCM-to-Opus playback. Full DAVE/MLS operation is exposed through an experimental feature because it requires live gateway MLS transition handling.
+- Poll vote, subscription, integration, entitlement, soundboard, invite, thread, and forum data now have typed models/events or REST wrappers where Discord documents them.
 
 ## 15. Testing And Coverage
 

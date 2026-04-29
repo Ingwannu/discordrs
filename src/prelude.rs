@@ -9,7 +9,7 @@ pub use crate::collector::{
 };
 pub use crate::command::{
     command_type, option_type, CommandDefinition, CommandOptionBuilder, MessageCommandBuilder,
-    SlashCommandBuilder, UserCommandBuilder,
+    PrimaryEntryPointCommandBuilder, SlashCommandBuilder, UserCommandBuilder,
 };
 pub use crate::constants::{button_style, gateway_intents, text_input_style};
 pub use crate::error::DiscordError;
@@ -20,15 +20,28 @@ pub use crate::gateway::ShardSupervisor;
 pub use crate::gateway::{Client, Context, EventHandler, ShardMessenger};
 pub use crate::helpers::{
     defer_interaction, defer_update_interaction, delete_followup_response,
-    delete_original_response, edit_original_response, followup_message, get_original_response,
-    launch_activity, respond_to_interaction, respond_with_autocomplete_choices,
-    respond_with_message, respond_with_modal_typed, send_message, update_interaction_message,
+    delete_original_response, edit_followup_response, edit_original_response, followup_message,
+    get_original_response, launch_activity, respond_to_interaction,
+    respond_with_autocomplete_choices, respond_with_message, respond_with_modal_typed,
+    send_message, update_interaction_message,
 };
 pub use crate::http::RestClient;
 pub use crate::model::{
-    ApplicationCommandOptionChoice, CommandInteractionData, CommandInteractionOption,
-    CreateMessage, GatewayBot, Interaction, InteractionCallbackResponse, InteractionContextData,
-    Message, PermissionsBitField, SessionStartLimit, Snowflake, VoiceServerUpdate, VoiceState,
+    Activity, ActivityAssets, ActivityButton, ActivityParty, ActivitySecrets, ActivityTimestamps,
+    ActivityType, Application, ApplicationCommandHandlerType, ApplicationCommandOptionChoice,
+    ApplicationIntegrationType, ApplicationRoleConnectionMetadata, ArchivedThreadsQuery,
+    AutoModerationRule, BulkGuildBanRequest, BulkGuildBanResponse, CommandInteractionData,
+    CommandInteractionOption, CreateMessage, CreateTestEntitlement, CurrentUserGuild, Entitlement,
+    EntitlementQuery, GatewayBot, GuildPreview, GuildPruneCount, GuildScheduledEventRecurrenceRule,
+    Integration, Interaction, InteractionCallbackResponse, InteractionContextData,
+    InteractionContextType, JoinedArchivedThreadsQuery, Message, PermissionsBitField,
+    PollAnswerVoters, RequestGuildMembers, SessionStartLimit, Sku, Snowflake, SoundboardSound,
+    SoundboardSoundList, Subscription, SubscriptionQuery, ThreadListResponse, ThreadMember,
+    ThreadMemberQuery, UpdatePresence, VanityUrl, VoiceRegion, VoiceServerUpdate, VoiceState,
+};
+pub use crate::oauth2::{
+    OAuth2AuthorizationRequest, OAuth2Client, OAuth2CodeExchange, OAuth2RefreshToken, OAuth2Scope,
+    OAuth2TokenResponse,
 };
 pub use crate::response::{InteractionResponseBuilder, MessageBuilder};
 #[cfg(feature = "voice")]
@@ -38,8 +51,14 @@ pub use crate::voice::{
 };
 #[cfg(feature = "voice")]
 pub use crate::voice_runtime::{
-    connect as connect_voice_runtime, VoiceRuntimeConfig, VoiceRuntimeHandle,
+    connect as connect_voice_runtime, VoiceDaveFrame, VoiceDaveFrameDecryptor, VoiceDecodedPacket,
+    VoiceOpusDecoder, VoiceOpusFrame, VoiceOutboundPacket, VoiceOutboundRtpState,
+    VoiceRawUdpPacket, VoiceReceivedPacket, VoiceRuntimeConfig, VoiceRuntimeHandle,
 };
+#[cfg(all(feature = "voice", feature = "voice-encode"))]
+pub use crate::voice_runtime::{AudioMixer, AudioSource, PcmFrame, VoiceOpusEncoder};
+#[cfg(all(feature = "voice", feature = "dave"))]
+pub use crate::voice_runtime::{VoiceDaveFrameEncryptor, VoiceDaveyDecryptor, VoiceDaveySession};
 
 #[cfg(test)]
 mod tests {

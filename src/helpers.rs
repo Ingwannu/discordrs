@@ -247,6 +247,21 @@ pub async fn delete_followup_response(
     .await
 }
 
+pub async fn edit_followup_response(
+    http: &DiscordHttpClient,
+    context: &InteractionContextData,
+    message_id: &str,
+    message: CreateMessage,
+) -> Result<Message, DiscordError> {
+    http.edit_followup_message_with_application_id(
+        context.application_id.as_str(),
+        &context.token,
+        message_id,
+        &message,
+    )
+    .await
+}
+
 pub async fn edit_message_with_container(
     http: &DiscordHttpClient,
     channel_id: u64,
@@ -737,6 +752,12 @@ mod tests {
                 .await
                 .unwrap_err(),
             "interaction_token",
+        );
+        assert_model_error_contains(
+            super::edit_followup_response(&http, &good_context, "bad/id", sample_message())
+                .await
+                .unwrap_err(),
+            "message_id",
         );
         assert_model_error_contains(
             delete_followup_response(&http, &good_context, "bad/id")

@@ -105,6 +105,7 @@ impl ShardRuntimeStatus {
 pub struct ShardRuntimeHandle {
     command_tx: Sender<ShardIpcMessage>,
     event_rx: Arc<Mutex<Receiver<ShardSupervisorEvent>>>,
+    _event_tx_guard: Option<Sender<ShardSupervisorEvent>>,
     status: Arc<Mutex<ShardRuntimeStatus>>,
 }
 
@@ -307,6 +308,7 @@ impl ShardingManager {
         let handle = ShardRuntimeHandle {
             command_tx,
             event_rx: Arc::new(Mutex::new(event_rx)),
+            _event_tx_guard: None,
             status: Arc::new(Mutex::new(ShardRuntimeStatus::new(info))),
         };
 
@@ -387,12 +389,13 @@ impl ShardingManager {
         }
 
         if let Some(info) = self.config.shard_info(shard_id) {
-            let (_, event_rx) = channel();
+            let (event_tx, event_rx) = channel();
             self.runtimes.insert(
                 shard_id,
                 ShardRuntimeHandle {
                     command_tx: sender,
                     event_rx: Arc::new(Mutex::new(event_rx)),
+                    _event_tx_guard: Some(event_tx),
                     status: Arc::new(Mutex::new(ShardRuntimeStatus::new(info))),
                 },
             );
@@ -596,6 +599,16 @@ mod tests {
         assert!(missing_event
             .to_string()
             .contains("missing shard runtime for shard 9"));
+    }
+
+    #[test]
+    fn register_ipc_keeps_empty_event_receiver_open() {
+        let mut manager = ShardingManager::new(ShardConfig::new(1));
+        let (command_tx, _command_rx) = channel();
+
+        manager.register_ipc(0, command_tx);
+
+        assert_eq!(manager.poll_event(0).unwrap(), None);
     }
 
     #[test]

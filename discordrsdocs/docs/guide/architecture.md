@@ -1,6 +1,6 @@
 # Architecture
 
-`discordrs` is split into focused modules so you can compose only what you need.
+`discord.rs` is split into focused modules so you can compose only what you need.
 
 ```mermaid
 flowchart LR
@@ -18,6 +18,7 @@ flowchart LR
 
   subgraph REST[HTTP Layer]
     RC[RestClient]
+    RP[HTTP Path Builders]
     HP[Helpers]
   end
 
@@ -42,6 +43,7 @@ flowchart LR
   C --> EV
   CL --> CACHE
   IH --> AX --> HP
+  RC --> RP
   HP --> RC
   HP --> BV2
   AX --> M
@@ -55,6 +57,9 @@ flowchart LR
 - `src/command.rs`: typed slash/user/message command builders
 - `src/gateway/`: websocket runtime, heartbeat/resume, typed event dispatch
 - `src/http.rs`: `RestClient` and compatibility `DiscordHttpClient`
+- `src/http_body.rs`: JSON/multipart request-body serialization and response-body parsing helpers
+- `src/http_paths.rs`: REST path, query-string, token-segment, and route-key helpers shared by `RestClient` and tests
+- `src/http_rate_limit.rs`: REST route/bucket/global rate-limit state and stale bucket cleanup
 - `src/cache.rs`: opt-in cache handle and manager types
 - `src/collector.rs`: opt-in async collectors
 - `src/parsers/`: raw + typed interaction parsing helpers
@@ -66,4 +71,5 @@ flowchart LR
 - Gateway mode: maintain websocket session, handle typed `Event`, call `RestClient` or managers when needed
 - Endpoint mode: receive signed interaction payloads, parse with `parse_interaction(...)`, respond with helpers
 - Hybrid mode: use both for richer operational workflows
-- Sharding and voice are planned as dedicated layers above the current runtime, not mixed into the base `Client`
+- Sharding and voice are dedicated feature-gated layers above the base `Client`.
+- Keep future REST domain splits on the same boundary: endpoint methods stay in `RestClient`, route construction lives in `http_paths`, body encoding lives in `http_body`, and rate-limit bookkeeping lives in `http_rate_limit`.

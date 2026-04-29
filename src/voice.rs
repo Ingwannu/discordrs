@@ -30,6 +30,10 @@ impl VoiceGatewayOpcode {
     pub const RESUME: Self = Self(7);
     pub const HELLO: Self = Self(8);
     pub const RESUMED: Self = Self(9);
+    pub const DAVE_PROTOCOL_TRANSITION_READY: Self = Self(23);
+    pub const DAVE_MLS_KEY_PACKAGE: Self = Self(26);
+    pub const DAVE_MLS_COMMIT_WELCOME: Self = Self(28);
+    pub const DAVE_MLS_INVALID_COMMIT_WELCOME: Self = Self(31);
 
     pub const fn code(self) -> u8 {
         self.0
@@ -401,6 +405,19 @@ pub enum VoiceGatewayCommand {
     Heartbeat {
         nonce: u64,
     },
+    DaveProtocolTransitionReady {
+        transition_id: u64,
+    },
+    DaveMlsKeyPackage {
+        key_package: Vec<u8>,
+    },
+    DaveMlsCommitWelcome {
+        commit: Vec<u8>,
+        welcome: Option<Vec<u8>>,
+    },
+    DaveMlsInvalidCommitWelcome {
+        transition_id: u64,
+    },
 }
 
 impl VoiceGatewayCommand {
@@ -411,6 +428,18 @@ impl VoiceGatewayCommand {
             VoiceGatewayCommand::Speaking(_) => VoiceGatewayOpcode::SPEAKING,
             VoiceGatewayCommand::Resume { .. } => VoiceGatewayOpcode::RESUME,
             VoiceGatewayCommand::Heartbeat { .. } => VoiceGatewayOpcode::HEARTBEAT,
+            VoiceGatewayCommand::DaveProtocolTransitionReady { .. } => {
+                VoiceGatewayOpcode::DAVE_PROTOCOL_TRANSITION_READY
+            }
+            VoiceGatewayCommand::DaveMlsKeyPackage { .. } => {
+                VoiceGatewayOpcode::DAVE_MLS_KEY_PACKAGE
+            }
+            VoiceGatewayCommand::DaveMlsCommitWelcome { .. } => {
+                VoiceGatewayOpcode::DAVE_MLS_COMMIT_WELCOME
+            }
+            VoiceGatewayCommand::DaveMlsInvalidCommitWelcome { .. } => {
+                VoiceGatewayOpcode::DAVE_MLS_INVALID_COMMIT_WELCOME
+            }
         }
     }
 
@@ -443,12 +472,49 @@ impl VoiceGatewayCommand {
                 "token": token,
             }),
             VoiceGatewayCommand::Heartbeat { nonce } => serde_json::json!(*nonce),
+            VoiceGatewayCommand::DaveProtocolTransitionReady { transition_id }
+            | VoiceGatewayCommand::DaveMlsInvalidCommitWelcome { transition_id } => {
+                serde_json::json!({
+                    "transition_id": transition_id,
+                })
+            }
+            VoiceGatewayCommand::DaveMlsKeyPackage { key_package } => {
+                serde_json::json!(key_package)
+            }
+            VoiceGatewayCommand::DaveMlsCommitWelcome { commit, welcome } => {
+                serde_json::json!({
+                    "commit": commit,
+                    "welcome": welcome,
+                })
+            }
         };
 
         serde_json::json!({
             "op": self.opcode().code(),
             "d": data,
         })
+    }
+
+    pub fn binary_payload(&self) -> Option<Vec<u8>> {
+        match self {
+            VoiceGatewayCommand::DaveMlsKeyPackage { key_package } => {
+                let mut bytes = Vec::with_capacity(1 + key_package.len());
+                bytes.push(self.opcode().code());
+                bytes.extend_from_slice(key_package);
+                Some(bytes)
+            }
+            VoiceGatewayCommand::DaveMlsCommitWelcome { commit, welcome } => {
+                let welcome_len = welcome.as_ref().map_or(0, Vec::len);
+                let mut bytes = Vec::with_capacity(1 + commit.len() + welcome_len);
+                bytes.push(self.opcode().code());
+                bytes.extend_from_slice(commit);
+                if let Some(welcome) = welcome {
+                    bytes.extend_from_slice(welcome);
+                }
+                Some(bytes)
+            }
+            _ => None,
+        }
     }
 }
 
@@ -573,6 +639,40 @@ impl AudioPlayer {
         self.queue.len()
     }
 
+    pub fn volume(&self) -> f32 {
+        self.volume
+    }
+
+    pub fn set_volume(&mut self, volume: f32) {
+        self.volume = volume.clamp(0.0, 1.0);
+    }
+
+    pub fn is_paused(&self) -> bool {
+        self.paused
+    }
+
+    pub fn pause(&mut self) {
+        if self.current.is_some() {
+            self.paused = true;
+        }
+    }
+
+    pub fn resume(&mut self) {
+        self.paused = false;
+    }
+
+    pub fn clear_queue(&mut self) -> usize {
+        let removed = self.queue.len();
+        self.queue.clear();
+        removed
+    }
+
+    pub fn skip(&mut self) -> Option<&AudioTrack> {
+        self.paused = false;
+        self.current = self.queue.pop_front();
+        self.current.as_ref()
+    }
+
     pub fn play_next(&mut self) -> Option<&AudioTrack> {
         self.current = self.queue.pop_front();
         self.paused = false;
@@ -582,6 +682,12 @@ impl AudioPlayer {
     pub fn stop(&mut self) -> Option<AudioTrack> {
         self.paused = false;
         self.current.take()
+    }
+
+    pub fn stop_all(&mut self) -> (Option<AudioTrack>, usize) {
+        let current = self.stop();
+        let queued = self.clear_queue();
+        (current, queued)
     }
 }
 
@@ -614,6 +720,18 @@ pub enum VoiceEvent {
         track: AudioTrack,
     },
     PlayerStopped {
+        guild_id: Snowflake,
+        track: AudioTrack,
+    },
+    PlayerPaused {
+        guild_id: Snowflake,
+        track: AudioTrack,
+    },
+    PlayerResumed {
+        guild_id: Snowflake,
+        track: AudioTrack,
+    },
+    PlayerSkipped {
         guild_id: Snowflake,
         track: AudioTrack,
     },
@@ -859,6 +977,62 @@ impl VoiceManager {
         Some(stopped_track)
     }
 
+    pub fn pause(&mut self, guild_id: impl Into<Snowflake>) -> Option<&AudioTrack> {
+        let guild_id = guild_id.into();
+        let player = self.players.get_mut(&guild_id)?;
+        player.pause();
+        let paused_track = player.current().cloned()?;
+        self.events.push(VoiceEvent::PlayerPaused {
+            guild_id,
+            track: paused_track,
+        });
+        player.current()
+    }
+
+    pub fn resume(&mut self, guild_id: impl Into<Snowflake>) -> Option<&AudioTrack> {
+        let guild_id = guild_id.into();
+        let player = self.players.get_mut(&guild_id)?;
+        player.resume();
+        let resumed_track = player.current().cloned()?;
+        self.events.push(VoiceEvent::PlayerResumed {
+            guild_id,
+            track: resumed_track,
+        });
+        player.current()
+    }
+
+    pub fn skip(&mut self, guild_id: impl Into<Snowflake>) -> Option<&AudioTrack> {
+        let guild_id = guild_id.into();
+        let player = self.players.get_mut(&guild_id)?;
+        let skipped_track = player.current().cloned();
+        let next_track = player.skip().cloned()?;
+        if let Some(track) = skipped_track {
+            self.events.push(VoiceEvent::PlayerSkipped {
+                guild_id: guild_id.clone(),
+                track,
+            });
+        }
+        self.events.push(VoiceEvent::PlayerStarted {
+            guild_id,
+            track: next_track,
+        });
+        player.current()
+    }
+
+    pub fn clear_queue(&mut self, guild_id: impl Into<Snowflake>) -> Option<usize> {
+        let guild_id = guild_id.into();
+        self.players
+            .get_mut(&guild_id)
+            .map(AudioPlayer::clear_queue)
+    }
+
+    pub fn set_volume(&mut self, guild_id: impl Into<Snowflake>, volume: f32) -> Option<f32> {
+        let guild_id = guild_id.into();
+        let player = self.players.get_mut(&guild_id)?;
+        player.set_volume(volume);
+        Some(player.volume())
+    }
+
     pub fn events(&self) -> &[VoiceEvent] {
         &self.events
     }
@@ -1011,6 +1185,41 @@ mod tests {
             assert_eq!(payload["op"], serde_json::json!(opcode));
             assert_eq!(payload["d"], data);
         }
+    }
+
+    #[test]
+    fn voice_gateway_dave_command_payloads_match_json_and_binary_wire_shapes() {
+        let transition_ready =
+            VoiceGatewayCommand::DaveProtocolTransitionReady { transition_id: 77 };
+        assert_eq!(transition_ready.opcode().code(), 23);
+        assert_eq!(transition_ready.payload()["op"], serde_json::json!(23));
+        assert_eq!(
+            transition_ready.payload()["d"],
+            serde_json::json!({ "transition_id": 77 })
+        );
+        assert_eq!(transition_ready.binary_payload(), None);
+
+        let key_package = VoiceGatewayCommand::DaveMlsKeyPackage {
+            key_package: vec![1, 2, 3],
+        };
+        assert_eq!(key_package.opcode().code(), 26);
+        assert_eq!(key_package.binary_payload(), Some(vec![26, 1, 2, 3]));
+
+        let commit_welcome = VoiceGatewayCommand::DaveMlsCommitWelcome {
+            commit: vec![4, 5],
+            welcome: Some(vec![6, 7]),
+        };
+        assert_eq!(commit_welcome.opcode().code(), 28);
+        assert_eq!(commit_welcome.binary_payload(), Some(vec![28, 4, 5, 6, 7]));
+
+        let invalid = VoiceGatewayCommand::DaveMlsInvalidCommitWelcome { transition_id: 88 };
+        assert_eq!(invalid.opcode().code(), 31);
+        assert_eq!(invalid.payload()["op"], serde_json::json!(31));
+        assert_eq!(
+            invalid.payload()["d"],
+            serde_json::json!({ "transition_id": 88 })
+        );
+        assert_eq!(invalid.binary_payload(), None);
     }
 
     #[test]
@@ -1323,6 +1532,8 @@ mod tests {
         let mut player = super::AudioPlayer::new();
         assert_eq!(player.play_next(), None);
         assert_eq!(player.stop(), None);
+        assert!(!player.is_paused());
+        assert_eq!(player.volume(), 1.0);
 
         player.enqueue(AudioTrack::new("track-1", "memory://one"));
         player.enqueue(AudioTrack::new("track-2", "memory://two"));
@@ -1331,15 +1542,88 @@ mod tests {
         let first = player.play_next().unwrap();
         assert_eq!(first.id, "track-1");
         assert_eq!(player.queue_len(), 1);
+        player.pause();
+        assert!(player.is_paused());
+        player.resume();
+        assert!(!player.is_paused());
+        player.set_volume(1.5);
+        assert_eq!(player.volume(), 1.0);
+        player.set_volume(0.25);
+        assert_eq!(player.volume(), 0.25);
 
         let stopped = player.stop().unwrap();
         assert_eq!(stopped.id, "track-1");
         assert_eq!(player.queue_len(), 1);
         assert_eq!(player.current(), None);
 
-        let second = player.play_next().unwrap();
+        let second = player.play_next().unwrap().clone();
         assert_eq!(second.id, "track-2");
         assert_eq!(player.queue_len(), 0);
+        assert_eq!(player.stop_all(), (Some(second), 0));
+        player.enqueue(AudioTrack::new("track-3", "memory://three"));
+        player.enqueue(AudioTrack::new("track-4", "memory://four"));
+        assert_eq!(player.clear_queue(), 2);
+        assert_eq!(player.queue_len(), 0);
+    }
+
+    #[test]
+    fn voice_manager_exposes_playback_queue_controls_and_events() {
+        let mut manager = VoiceManager::new();
+        let guild_id = Snowflake::from("1");
+        manager.connect(
+            VoiceConnectionConfig::new(guild_id.clone(), "2")
+                .session_id("session")
+                .token("token")
+                .endpoint("voice.discord.media"),
+        );
+        manager
+            .enqueue(guild_id.clone(), AudioTrack::new("track-1", "memory://one"))
+            .unwrap();
+        manager
+            .enqueue(guild_id.clone(), AudioTrack::new("track-2", "memory://two"))
+            .unwrap();
+
+        assert_eq!(manager.set_volume(guild_id.clone(), 2.0), Some(1.0));
+        assert_eq!(
+            manager
+                .start_next(guild_id.clone())
+                .map(|track| track.id.as_str()),
+            Some("track-1")
+        );
+        assert_eq!(
+            manager
+                .pause(guild_id.clone())
+                .map(|track| track.id.as_str()),
+            Some("track-1")
+        );
+        assert!(manager.player(guild_id.clone()).unwrap().is_paused());
+        assert_eq!(
+            manager
+                .resume(guild_id.clone())
+                .map(|track| track.id.as_str()),
+            Some("track-1")
+        );
+        assert!(!manager.player(guild_id.clone()).unwrap().is_paused());
+        assert_eq!(
+            manager
+                .skip(guild_id.clone())
+                .map(|track| track.id.as_str()),
+            Some("track-2")
+        );
+        assert_eq!(manager.clear_queue(guild_id.clone()), Some(0));
+        assert!(matches!(
+            manager.events(),
+            events if events.iter().any(|event| matches!(
+                event,
+                super::VoiceEvent::PlayerPaused { track, .. } if track.id == "track-1"
+            )) && events.iter().any(|event| matches!(
+                event,
+                super::VoiceEvent::PlayerResumed { track, .. } if track.id == "track-1"
+            )) && events.iter().any(|event| matches!(
+                event,
+                super::VoiceEvent::PlayerSkipped { track, .. } if track.id == "track-1"
+            ))
+        ));
     }
 
     #[test]

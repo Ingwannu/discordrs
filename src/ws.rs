@@ -19,12 +19,16 @@ impl GatewayEncoding {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GatewayCompression {
     ZlibStream,
+    #[cfg(feature = "zstd-stream")]
+    ZstdStream,
 }
 
 impl GatewayCompression {
     pub fn as_str(self) -> &'static str {
         match self {
             GatewayCompression::ZlibStream => "zlib-stream",
+            #[cfg(feature = "zstd-stream")]
+            GatewayCompression::ZstdStream => "zstd-stream",
         }
     }
 }
@@ -34,6 +38,7 @@ pub struct GatewayConnectionConfig {
     base_url: String,
     version: u8,
     encoding: GatewayEncoding,
+    compression: Option<GatewayCompression>,
     shard: Option<(u32, u32)>,
 }
 
@@ -49,6 +54,7 @@ impl GatewayConnectionConfig {
             base_url: base_url.into(),
             version: DEFAULT_GATEWAY_VERSION,
             encoding: GatewayEncoding::Json,
+            compression: None,
             shard: None,
         }
     }
@@ -68,10 +74,14 @@ impl GatewayConnectionConfig {
         self
     }
 
-    /// Gateway zlib-stream compression is not supported by the runtime and is ignored.
-    pub fn compression(self, compression: GatewayCompression) -> Self {
-        let _ = compression;
+    /// Enable gateway transport compression.
+    pub fn compression(mut self, compression: GatewayCompression) -> Self {
+        self.compression = Some(compression);
         self
+    }
+
+    pub fn compression_kind(&self) -> Option<GatewayCompression> {
+        self.compression
     }
 
     pub fn shard(mut self, shard_id: u32, total_shards: u32) -> Self {
@@ -97,6 +107,15 @@ impl GatewayConnectionConfig {
                 &mut normalized,
                 &format!("encoding={}", self.encoding.as_str()),
             );
+        }
+
+        if let Some(compression) = self.compression {
+            if !has_query_param(&normalized, "compress") {
+                append_query_param(
+                    &mut normalized,
+                    &format!("compress={}", compression.as_str()),
+                );
+            }
         }
 
         if let Some((shard_id, total_shards)) = self.shard {
@@ -168,7 +187,7 @@ mod tests {
     }
 
     #[test]
-    fn normalized_url_strips_unsupported_compression_and_adds_shard() {
+    fn normalized_url_includes_compression_when_configured_and_adds_shard() {
         let url = GatewayConnectionConfig::new(
             "wss://gateway.discord.gg/?encoding=json&compress=zlib-stream",
         )
@@ -178,7 +197,7 @@ mod tests {
 
         assert_eq!(
             url,
-            "wss://gateway.discord.gg/?encoding=json&v=10&shard=2,8"
+            "wss://gateway.discord.gg/?encoding=json&v=10&compress=zlib-stream&shard=2,8"
         );
     }
 
@@ -196,6 +215,22 @@ mod tests {
             "wss://gateway.discord.test/socket?v=11&encoding=json"
         );
         assert_eq!(config.to_string(), config.normalized_url());
+    }
+
+    #[cfg(feature = "zstd-stream")]
+    #[test]
+    fn normalized_url_supports_zstd_stream_compression() {
+        let url = GatewayConnectionConfig::new(
+            "wss://gateway.discord.gg/?encoding=json&compress=zlib-stream",
+        )
+        .compression(GatewayCompression::ZstdStream)
+        .normalized_url();
+
+        assert_eq!(GatewayCompression::ZstdStream.as_str(), "zstd-stream");
+        assert_eq!(
+            url,
+            "wss://gateway.discord.gg/?encoding=json&v=10&compress=zstd-stream"
+        );
     }
 
     #[test]

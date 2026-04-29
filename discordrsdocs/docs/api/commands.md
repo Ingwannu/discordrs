@@ -1,6 +1,6 @@
 # Commands API
 
-`discordrs` now exposes typed application command builders instead of relying on raw `Vec<Value>` payload assembly.
+`discord.rs` now exposes typed application command builders instead of relying on raw `Vec<Value>` payload assembly.
 
 ## Main Builders
 

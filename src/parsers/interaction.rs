@@ -194,6 +194,21 @@ fn parse_typed_interaction_context(raw: &Value) -> Result<InteractionContextData
             .transpose()?,
         locale: optional_string_field(raw, "locale"),
         guild_locale: optional_string_field(raw, "guild_locale"),
+        entitlements: raw
+            .get("entitlements")
+            .cloned()
+            .map(serde_json::from_value)
+            .transpose()?,
+        context: raw
+            .get("context")
+            .cloned()
+            .map(serde_json::from_value)
+            .transpose()?,
+        authorizing_integration_owners: raw
+            .get("authorizing_integration_owners")
+            .cloned()
+            .map(serde_json::from_value)
+            .transpose()?,
     })
 }
 
@@ -211,6 +226,7 @@ fn parse_command_interaction_data(raw: &Value) -> Result<CommandInteractionData,
         kind: data.get("type").and_then(value_to_u8),
         options,
         resolved: data.get("resolved").cloned(),
+        target_id: optional_string_field(&data, "target_id").map(Snowflake::from),
     })
 }
 
@@ -462,6 +478,53 @@ mod tests {
         assert_eq!(context.channel_id, None);
         assert_eq!(context.user_id.as_deref(), Some("30"));
         assert_eq!(context.raw, raw);
+    }
+
+    #[test]
+    fn parse_interaction_preserves_install_context_entitlements_and_target_id() {
+        match parse_interaction(&json!({
+            "id": "1",
+            "application_id": "2",
+            "token": "token",
+            "type": 2,
+            "context": 1,
+            "authorizing_integration_owners": {
+                "0": "44",
+                "1": "55"
+            },
+            "entitlements": [{
+                "id": "10",
+                "sku_id": "11",
+                "application_id": "2",
+                "type": 8,
+                "deleted": false
+            }],
+            "data": {
+                "id": "3",
+                "name": "Inspect",
+                "type": 2,
+                "target_id": "99"
+            }
+        }))
+        .unwrap()
+        {
+            Interaction::UserContextMenu(interaction) => {
+                assert_eq!(interaction.data.target_id.unwrap().as_str(), "99");
+                assert_eq!(interaction.context.context.unwrap().0, 1);
+                assert_eq!(interaction.context.entitlements.unwrap().len(), 1);
+                assert_eq!(
+                    interaction
+                        .context
+                        .authorizing_integration_owners
+                        .unwrap()
+                        .get("1")
+                        .unwrap()
+                        .as_str(),
+                    "55"
+                );
+            }
+            other => panic!("unexpected interaction: {other:?}"),
+        }
     }
 
     #[test]

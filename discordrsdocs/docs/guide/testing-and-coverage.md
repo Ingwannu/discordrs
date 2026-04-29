@@ -1,7 +1,7 @@
 # Testing And Coverage
 
 This guide records the local testing and coverage patterns that worked well while raising
-`discordrs` coverage.
+`discord.rs` coverage.
 
 ## Goals
 
@@ -18,7 +18,7 @@ cargo test --all-features
 cargo check --all-features --all-targets
 cargo clippy --all-features --tests -- -D warnings
 cargo fmt --all -- --check
-cargo llvm-cov --all-features --summary-only
+cargo llvm-cov --all-features --summary-only --fail-under-lines 90.0
 ```
 
 If `cargo llvm-cov` is not installed:
@@ -92,6 +92,8 @@ For `gateway/bot`, `cache`, `collector`, `sharding`, `voice`, and `voice_runtime
 ## Practical Notes
 
 - Check `cargo llvm-cov --summary-only` often and start with the biggest files.
+- CI coverage intentionally measures the full source tree without an `ignore-filename-regex`;
+  lower the threshold only when the real total changes, not to preserve a badge number.
 - Prefer existing `#[cfg(test)]` modules when the target is private helper code.
 - Use harness tests only after direct unit tests stop being enough.
 - Treat `gateway/bot.rs`, `http.rs`, and `interactions.rs` as the final expensive coverage tiers.
