@@ -1,7 +1,7 @@
 # Testing And Coverage
 
 This guide records the local testing and coverage patterns that worked well while raising
-`discordrs` coverage.
+`discord.rs` coverage.
 
 ## Goals
 

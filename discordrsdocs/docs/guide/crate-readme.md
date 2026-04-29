@@ -1,8 +1,10 @@
-# discordrs
+# discord.rs
 
 > This page mirrors the crate README as source documentation. For the current docs-first surface, prefer the typed runtime pages for `Client`, `RestClient`, commands, cache, and collectors.
 
-Standalone Discord bot framework for Rust with typed models, typed gateway events, Components V2, collectors, cache-aware managers, and HTTP client
+discord.rs is a standalone Discord bot framework for Rust with typed models, typed gateway events, Components V2, collectors, cache-aware managers, voice receive helpers, and an HTTP client.
+
+Brand name: discord.rs. The crates.io package name and Rust import path remain `discordrs`.
 
 ## Features
 
@@ -15,25 +17,31 @@ Standalone Discord bot framework for Rust with typed models, typed gateway event
 - V2 modal submission parser that preserves all V2 component types that serenity drops
 - Interaction routing helpers: `parse_interaction`, `parse_raw_interaction`, `parse_interaction_context`, and `try_interactions_endpoint`
 - Cache-backed manager reads with in-memory storage enabled by the `cache` feature
-- Feature-gated runtime and storage layers: `gateway`, `interactions`, `cache`, `collectors`, `sharding`, and `voice`
+- Voice runtime receive helpers for UDP packet receive, RTP-size decrypt, Opus PCM decode, and experimental DAVE hooks
+- Typed Discord coverage for polls, subscriptions, entitlements, soundboard, thread details, forum fields, invites, and integrations
+- Feature-gated runtime and storage layers: `gateway`, `interactions`, `cache`, `collectors`, `sharding`, `voice`, and `dave`
 
 ## Install
 
 ```toml
 [dependencies]
-discordrs = "1.0.0"
+discordrs = "1.1.0"
 ```
 
 ```toml
 [dependencies]
 # Gateway bot client
-discordrs = { version = "1.0.0", features = ["gateway"] }
+discordrs = { version = "1.1.0", features = ["gateway"] }
 
 # HTTP Interactions Endpoint
-discordrs = { version = "1.0.0", features = ["interactions"] }
+discordrs = { version = "1.1.0", features = ["interactions"] }
 
 # Both runtime modes
-discordrs = { version = "1.0.0", features = ["gateway", "interactions"] }
+discordrs = { version = "1.1.0", features = ["gateway", "interactions"] }
+
+# Voice receive and experimental DAVE hook
+discordrs = { version = "1.1.0", features = ["voice"] }
+discordrs = { version = "1.1.0", features = ["voice", "dave"] }
 ```
 
 ## Quick Example
@@ -137,20 +145,22 @@ let modal = ModalBuilder::new("preferences_modal", "Preferences")
 | `cache` | Enables the in-memory cache storage used by gateway cache managers | tokio |
 | `collectors` | Async collectors for messages and interactions | tokio |
 | `sharding` | Sharding manager and reusable gateway config abstractions | tokio |
-| `voice` | In-memory voice connection and player skeletons | tokio |
+| `voice` | Voice gateway/UDP runtime receive, transport decrypt, and Opus PCM decode helpers | tokio, aes-gcm, chacha20poly1305, opus-decoder |
+| `dave` | Experimental DAVE/MLS receive integration hook backed by `davey` | voice, davey |
 
 ## Notes
 
-- `discordrs` started as a helper around serenity workflows, and `1.0.0` is the first stabilized standalone framework release.
+- `discord.rs` started as a helper around serenity workflows, and `1.0.0` is the first stabilized standalone framework release.
 - `EventHandler::handle_event(...)` is the typed gateway entry point. Legacy convenience callbacks such as `ready`, `message_create`, and `interaction_create` remain available and now receive typed payloads too.
 - The parser keeps V2 modal component types, including `Label`, `RadioGroup`, and `CheckboxGroup`, so routing logic can keep full fidelity.
+- Default `voice` provides transport-decrypted Opus frames and PCM decode. DAVE/MLS is exposed through the experimental `dave` feature and still needs live gateway transition validation before claiming production interoperability.
 
 ## License
 
 Licensed under either of:
 
-- Apache License, Version 2.0 ([LICENSE-APACHE](https://github.com/Ingwannu/discordrs/blob/main/LICENSE-APACHE))
-- MIT license ([LICENSE-MIT](https://github.com/Ingwannu/discordrs/blob/main/LICENSE-MIT))
+- Apache License, Version 2.0 ([LICENSE-APACHE](https://github.com/Ingwannu/discord.rs/blob/main/LICENSE-APACHE))
+- MIT license ([LICENSE-MIT](https://github.com/Ingwannu/discord.rs/blob/main/LICENSE-MIT))
 
 at your option.
 

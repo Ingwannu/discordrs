@@ -538,6 +538,7 @@ pub mod interaction_callback_type {
     pub const UPDATE_MESSAGE: u8 = 7;
     pub const AUTOCOMPLETE_RESULT: u8 = 8;
     pub const MODAL: u8 = 9;
+    pub const PREMIUM_REQUIRED: u8 = 10;
     pub const LAUNCH_ACTIVITY: u8 = 12;
 }
 

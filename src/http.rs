@@ -1,13 +1,12 @@
 use std::collections::HashMap;
-use std::future::poll_fn;
 use std::str::FromStr;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::task::{Poll, Waker};
 use std::time::{Duration, Instant};
 
 use reqwest::{
     header::{HeaderMap, HeaderValue},
+    multipart::{Form, Part},
     Client, Method, StatusCode,
 };
 use serde::de::DeserializeOwned;
@@ -17,8 +16,14 @@ use tracing::{debug, warn};
 use crate::command::CommandDefinition;
 use crate::error::DiscordError;
 use crate::model::{
-    ApplicationCommand, Channel, CreateDmChannel, CreateMessage, GatewayBot, Guild,
-    InteractionCallbackResponse, Member, Message, Role, Snowflake,
+    ApplicationCommand, ArchivedThreadsQuery, Ban, Channel, CreateDmChannel, CreateMessage,
+    CreateTestEntitlement, Entitlement, EntitlementQuery, FollowedChannel, GatewayBot, Guild,
+    GuildOnboarding, GuildScheduledEvent, GuildScheduledEventUser, GuildTemplate,
+    GuildWidgetSettings, Integration, InteractionCallbackResponse, Invite,
+    JoinedArchivedThreadsQuery, Member, Message, PollAnswerVoters, Role, Sku, Snowflake,
+    SoundboardSound, SoundboardSoundList, StageInstance, Sticker, StickerPackList, Subscription,
+    SubscriptionQuery, ThreadListResponse, ThreadMember, ThreadMemberQuery, User, Webhook,
+    WelcomeScreen,
 };
 use crate::types::invalid_data_error;
 
@@ -34,6 +39,34 @@ pub struct RestClient {
 }
 
 pub type DiscordHttpClient = RestClient;
+
+/// File data attached to a Discord multipart request.
+///
+/// The request body is sent with a `payload_json` part plus one `files[n]`
+/// part per attachment.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FileAttachment {
+    pub filename: String,
+    pub data: Vec<u8>,
+    pub content_type: Option<String>,
+}
+
+pub type FileUpload = FileAttachment;
+
+impl FileAttachment {
+    pub fn new(filename: impl Into<String>, data: impl Into<Vec<u8>>) -> Self {
+        Self {
+            filename: filename.into(),
+            data: data.into(),
+            content_type: None,
+        }
+    }
+
+    pub fn with_content_type(mut self, content_type: impl Into<String>) -> Self {
+        self.content_type = Some(content_type.into());
+        self
+    }
+}
 
 impl RestClient {
     pub fn new(token: impl Into<String>, application_id: u64) -> Self {
@@ -93,6 +126,21 @@ impl RestClient {
         .await
     }
 
+    pub async fn create_message_with_files(
+        &self,
+        channel_id: impl Into<Snowflake>,
+        body: &CreateMessage,
+        files: &[FileAttachment],
+    ) -> Result<Message, DiscordError> {
+        self.request_typed_multipart(
+            Method::POST,
+            &format!("/channels/{}/messages", channel_id.into()),
+            body,
+            files,
+        )
+        .await
+    }
+
     pub async fn update_message(
         &self,
         channel_id: impl Into<Snowflake>,
@@ -107,6 +155,26 @@ impl RestClient {
                 message_id.into()
             ),
             Some(body),
+        )
+        .await
+    }
+
+    pub async fn update_message_with_files(
+        &self,
+        channel_id: impl Into<Snowflake>,
+        message_id: impl Into<Snowflake>,
+        body: &CreateMessage,
+        files: &[FileAttachment],
+    ) -> Result<Message, DiscordError> {
+        self.request_typed_multipart(
+            Method::PATCH,
+            &format!(
+                "/channels/{}/messages/{}",
+                channel_id.into(),
+                message_id.into()
+            ),
+            body,
+            files,
         )
         .await
     }
@@ -440,6 +508,64 @@ impl RestClient {
         self.request(Method::POST, &path, Some(body)).await
     }
 
+    pub async fn execute_webhook_with_files(
+        &self,
+        webhook_id: impl Into<Snowflake>,
+        token: &str,
+        body: &Value,
+        files: &[FileAttachment],
+    ) -> Result<Value, DiscordError> {
+        let path = execute_webhook_path(webhook_id.into(), token)?;
+        self.request_multipart(Method::POST, &path, body, files)
+            .await
+    }
+
+    pub async fn get_webhook_message(
+        &self,
+        webhook_id: impl Into<Snowflake>,
+        token: &str,
+        message_id: &str,
+    ) -> Result<Message, DiscordError> {
+        let path = webhook_message_path(webhook_id.into(), token, message_id)?;
+        self.request_typed(Method::GET, &path, Option::<&Value>::None)
+            .await
+    }
+
+    pub async fn edit_webhook_message(
+        &self,
+        webhook_id: impl Into<Snowflake>,
+        token: &str,
+        message_id: &str,
+        body: &CreateMessage,
+    ) -> Result<Message, DiscordError> {
+        let path = webhook_message_path(webhook_id.into(), token, message_id)?;
+        self.request_typed(Method::PATCH, &path, Some(body)).await
+    }
+
+    pub async fn edit_webhook_message_with_files(
+        &self,
+        webhook_id: impl Into<Snowflake>,
+        token: &str,
+        message_id: &str,
+        body: &CreateMessage,
+        files: &[FileAttachment],
+    ) -> Result<Message, DiscordError> {
+        let path = webhook_message_path(webhook_id.into(), token, message_id)?;
+        self.request_typed_multipart(Method::PATCH, &path, body, files)
+            .await
+    }
+
+    pub async fn delete_webhook_message(
+        &self,
+        webhook_id: impl Into<Snowflake>,
+        token: &str,
+        message_id: &str,
+    ) -> Result<(), DiscordError> {
+        let path = webhook_message_path(webhook_id.into(), token, message_id)?;
+        self.request_no_content(Method::DELETE, &path, Option::<&Value>::None)
+            .await
+    }
+
     pub async fn create_dm_channel_typed(
         &self,
         body: &CreateDmChannel,
@@ -456,6 +582,18 @@ impl RestClient {
     ) -> Result<(), DiscordError> {
         let path = interaction_callback_path(interaction_id.into(), interaction_token)?;
         self.request_no_content(Method::POST, &path, Some(body))
+            .await
+    }
+
+    pub async fn create_interaction_response_with_files(
+        &self,
+        interaction_id: impl Into<Snowflake>,
+        interaction_token: &str,
+        body: &InteractionCallbackResponse,
+        files: &[FileAttachment],
+    ) -> Result<(), DiscordError> {
+        let path = interaction_callback_path(interaction_id.into(), interaction_token)?;
+        self.request_multipart_no_content(Method::POST, &path, body, files)
             .await
     }
 
@@ -551,6 +689,1794 @@ impl RestClient {
         .await
     }
 
+    pub async fn pin_message(
+        &self,
+        channel_id: impl Into<Snowflake>,
+        message_id: impl Into<Snowflake>,
+    ) -> Result<(), DiscordError> {
+        self.request_no_content(
+            Method::PUT,
+            &format!("/channels/{}/pins/{}", channel_id.into(), message_id.into()),
+            Option::<&Value>::None,
+        )
+        .await
+    }
+
+    pub async fn unpin_message(
+        &self,
+        channel_id: impl Into<Snowflake>,
+        message_id: impl Into<Snowflake>,
+    ) -> Result<(), DiscordError> {
+        self.request_no_content(
+            Method::DELETE,
+            &format!("/channels/{}/pins/{}", channel_id.into(), message_id.into()),
+            Option::<&Value>::None,
+        )
+        .await
+    }
+
+    pub async fn get_pinned_messages(
+        &self,
+        channel_id: impl Into<Snowflake>,
+    ) -> Result<Vec<Message>, DiscordError> {
+        self.request_typed(
+            Method::GET,
+            &format!("/channels/{}/pins", channel_id.into()),
+            Option::<&Value>::None,
+        )
+        .await
+    }
+
+    pub async fn trigger_typing_indicator(
+        &self,
+        channel_id: impl Into<Snowflake>,
+    ) -> Result<(), DiscordError> {
+        self.request_no_content(
+            Method::POST,
+            &format!("/channels/{}/typing", channel_id.into()),
+            Option::<&Value>::None,
+        )
+        .await
+    }
+
+    pub async fn crosspost_message(
+        &self,
+        channel_id: impl Into<Snowflake>,
+        message_id: impl Into<Snowflake>,
+    ) -> Result<Message, DiscordError> {
+        self.request_typed(
+            Method::POST,
+            &format!(
+                "/channels/{}/messages/{}/crosspost",
+                channel_id.into(),
+                message_id.into()
+            ),
+            Option::<&Value>::None,
+        )
+        .await
+    }
+
+    pub async fn get_channel_messages_paginated(
+        &self,
+        channel_id: impl Into<Snowflake>,
+        limit: Option<u64>,
+        before: Option<Snowflake>,
+        after: Option<Snowflake>,
+        around: Option<Snowflake>,
+    ) -> Result<Vec<Message>, DiscordError> {
+        let mut params = Vec::new();
+        if let Some(l) = limit {
+            params.push(format!("limit={l}"));
+        }
+        if let Some(b) = before {
+            params.push(format!("before={b}"));
+        }
+        if let Some(a) = after {
+            params.push(format!("after={a}"));
+        }
+        if let Some(ar) = around {
+            params.push(format!("around={ar}"));
+        }
+        let path = if params.is_empty() {
+            format!("/channels/{}/messages", channel_id.into())
+        } else {
+            format!(
+                "/channels/{}/messages?{}",
+                channel_id.into(),
+                params.join("&")
+            )
+        };
+        self.request_typed(Method::GET, &path, Option::<&Value>::None)
+            .await
+    }
+
+    pub async fn get_reactions(
+        &self,
+        channel_id: impl Into<Snowflake>,
+        message_id: impl Into<Snowflake>,
+        emoji: &str,
+        limit: Option<u64>,
+        after: Option<Snowflake>,
+    ) -> Result<Vec<User>, DiscordError> {
+        let mut params = Vec::new();
+        if let Some(l) = limit {
+            params.push(format!("limit={l}"));
+        }
+        if let Some(a) = after {
+            params.push(format!("after={a}"));
+        }
+        let query = if params.is_empty() {
+            String::new()
+        } else {
+            format!("?{}", params.join("&"))
+        };
+        let path = format!(
+            "/channels/{}/messages/{}/reactions/{}{}",
+            channel_id.into(),
+            message_id.into(),
+            emoji,
+            query
+        );
+        self.request_typed(Method::GET, &path, Option::<&Value>::None)
+            .await
+    }
+
+    pub async fn remove_user_reaction(
+        &self,
+        channel_id: impl Into<Snowflake>,
+        message_id: impl Into<Snowflake>,
+        emoji: &str,
+        user_id: impl Into<Snowflake>,
+    ) -> Result<(), DiscordError> {
+        let path = format!(
+            "/channels/{}/messages/{}/reactions/{}/{}",
+            channel_id.into(),
+            message_id.into(),
+            emoji,
+            user_id.into()
+        );
+        self.request_no_content(Method::DELETE, &path, Option::<&Value>::None)
+            .await
+    }
+
+    pub async fn remove_all_reactions(
+        &self,
+        channel_id: impl Into<Snowflake>,
+        message_id: impl Into<Snowflake>,
+    ) -> Result<(), DiscordError> {
+        self.request_no_content(
+            Method::DELETE,
+            &format!(
+                "/channels/{}/messages/{}/reactions",
+                channel_id.into(),
+                message_id.into()
+            ),
+            Option::<&Value>::None,
+        )
+        .await
+    }
+
+    pub async fn remove_all_reactions_for_emoji(
+        &self,
+        channel_id: impl Into<Snowflake>,
+        message_id: impl Into<Snowflake>,
+        emoji: &str,
+    ) -> Result<(), DiscordError> {
+        self.request_no_content(
+            Method::DELETE,
+            &format!(
+                "/channels/{}/messages/{}/reactions/{}",
+                channel_id.into(),
+                message_id.into(),
+                emoji
+            ),
+            Option::<&Value>::None,
+        )
+        .await
+    }
+
+    pub async fn edit_channel_permissions(
+        &self,
+        channel_id: impl Into<Snowflake>,
+        overwrite_id: impl Into<Snowflake>,
+        body: &Value,
+    ) -> Result<(), DiscordError> {
+        self.request_no_content(
+            Method::PUT,
+            &format!(
+                "/channels/{}/permissions/{}",
+                channel_id.into(),
+                overwrite_id.into()
+            ),
+            Some(body),
+        )
+        .await
+    }
+
+    pub async fn delete_channel_permission(
+        &self,
+        channel_id: impl Into<Snowflake>,
+        overwrite_id: impl Into<Snowflake>,
+    ) -> Result<(), DiscordError> {
+        self.request_no_content(
+            Method::DELETE,
+            &format!(
+                "/channels/{}/permissions/{}",
+                channel_id.into(),
+                overwrite_id.into()
+            ),
+            Option::<&Value>::None,
+        )
+        .await
+    }
+
+    pub async fn create_thread_from_message(
+        &self,
+        channel_id: impl Into<Snowflake>,
+        message_id: impl Into<Snowflake>,
+        body: &Value,
+    ) -> Result<Channel, DiscordError> {
+        self.request_typed(
+            Method::POST,
+            &format!(
+                "/channels/{}/messages/{}/threads",
+                channel_id.into(),
+                message_id.into()
+            ),
+            Some(body),
+        )
+        .await
+    }
+
+    pub async fn create_thread(
+        &self,
+        channel_id: impl Into<Snowflake>,
+        body: &Value,
+    ) -> Result<Channel, DiscordError> {
+        self.request_typed(
+            Method::POST,
+            &format!("/channels/{}/threads", channel_id.into()),
+            Some(body),
+        )
+        .await
+    }
+
+    pub async fn join_thread(&self, channel_id: impl Into<Snowflake>) -> Result<(), DiscordError> {
+        self.request_no_content(
+            Method::PUT,
+            &format!("/channels/{}/thread-members/@me", channel_id.into()),
+            Option::<&Value>::None,
+        )
+        .await
+    }
+
+    pub async fn add_thread_member(
+        &self,
+        channel_id: impl Into<Snowflake>,
+        user_id: impl Into<Snowflake>,
+    ) -> Result<(), DiscordError> {
+        self.request_no_content(
+            Method::PUT,
+            &format!(
+                "/channels/{}/thread-members/{}",
+                channel_id.into(),
+                user_id.into()
+            ),
+            Option::<&Value>::None,
+        )
+        .await
+    }
+
+    pub async fn leave_thread(&self, channel_id: impl Into<Snowflake>) -> Result<(), DiscordError> {
+        self.request_no_content(
+            Method::DELETE,
+            &format!("/channels/{}/thread-members/@me", channel_id.into()),
+            Option::<&Value>::None,
+        )
+        .await
+    }
+
+    pub async fn remove_thread_member(
+        &self,
+        channel_id: impl Into<Snowflake>,
+        user_id: impl Into<Snowflake>,
+    ) -> Result<(), DiscordError> {
+        self.request_no_content(
+            Method::DELETE,
+            &format!(
+                "/channels/{}/thread-members/{}",
+                channel_id.into(),
+                user_id.into()
+            ),
+            Option::<&Value>::None,
+        )
+        .await
+    }
+
+    pub async fn get_thread_member(
+        &self,
+        channel_id: impl Into<Snowflake>,
+        user_id: impl Into<Snowflake>,
+        with_member: Option<bool>,
+    ) -> Result<ThreadMember, DiscordError> {
+        let query = bool_query("with_member", with_member);
+        self.request_typed(
+            Method::GET,
+            &format!(
+                "/channels/{}/thread-members/{}{}",
+                channel_id.into(),
+                user_id.into(),
+                query
+            ),
+            Option::<&Value>::None,
+        )
+        .await
+    }
+
+    pub async fn get_thread_members(
+        &self,
+        channel_id: impl Into<Snowflake>,
+    ) -> Result<Vec<ThreadMember>, DiscordError> {
+        self.list_thread_members(channel_id, &ThreadMemberQuery::default())
+            .await
+    }
+
+    pub async fn list_thread_members(
+        &self,
+        channel_id: impl Into<Snowflake>,
+        query: &ThreadMemberQuery,
+    ) -> Result<Vec<ThreadMember>, DiscordError> {
+        self.request_typed(
+            Method::GET,
+            &format!(
+                "/channels/{}/thread-members{}",
+                channel_id.into(),
+                thread_member_query(query)
+            ),
+            Option::<&Value>::None,
+        )
+        .await
+    }
+
+    pub async fn get_public_archived_threads(
+        &self,
+        channel_id: impl Into<Snowflake>,
+        limit: Option<u64>,
+    ) -> Result<serde_json::Value, DiscordError> {
+        let path = match limit {
+            Some(l) => format!(
+                "/channels/{}/threads/archived/public?limit={}",
+                channel_id.into(),
+                l
+            ),
+            None => format!("/channels/{}/threads/archived/public", channel_id.into()),
+        };
+        self.request(Method::GET, &path, Option::<&Value>::None)
+            .await
+    }
+
+    pub async fn list_public_archived_threads(
+        &self,
+        channel_id: impl Into<Snowflake>,
+        query: &ArchivedThreadsQuery,
+    ) -> Result<ThreadListResponse, DiscordError> {
+        self.request_typed(
+            Method::GET,
+            &format!(
+                "/channels/{}/threads/archived/public{}",
+                channel_id.into(),
+                archived_threads_query(query)
+            ),
+            Option::<&Value>::None,
+        )
+        .await
+    }
+
+    pub async fn list_private_archived_threads(
+        &self,
+        channel_id: impl Into<Snowflake>,
+        query: &ArchivedThreadsQuery,
+    ) -> Result<ThreadListResponse, DiscordError> {
+        self.request_typed(
+            Method::GET,
+            &format!(
+                "/channels/{}/threads/archived/private{}",
+                channel_id.into(),
+                archived_threads_query(query)
+            ),
+            Option::<&Value>::None,
+        )
+        .await
+    }
+
+    pub async fn list_joined_private_archived_threads(
+        &self,
+        channel_id: impl Into<Snowflake>,
+        query: &JoinedArchivedThreadsQuery,
+    ) -> Result<ThreadListResponse, DiscordError> {
+        self.request_typed(
+            Method::GET,
+            &format!(
+                "/channels/{}/users/@me/threads/archived/private{}",
+                channel_id.into(),
+                joined_archived_threads_query(query)
+            ),
+            Option::<&Value>::None,
+        )
+        .await
+    }
+
+    pub async fn get_active_guild_threads(
+        &self,
+        guild_id: impl Into<Snowflake>,
+    ) -> Result<ThreadListResponse, DiscordError> {
+        self.request_typed(
+            Method::GET,
+            &format!("/guilds/{}/threads/active", guild_id.into()),
+            Option::<&Value>::None,
+        )
+        .await
+    }
+
+    pub async fn get_guild_bans(
+        &self,
+        guild_id: impl Into<Snowflake>,
+        limit: Option<u64>,
+        before: Option<Snowflake>,
+    ) -> Result<Vec<Ban>, DiscordError> {
+        let mut params = Vec::new();
+        if let Some(l) = limit {
+            params.push(format!("limit={l}"));
+        }
+        if let Some(b) = before {
+            params.push(format!("before={b}"));
+        }
+        let query = if params.is_empty() {
+            String::new()
+        } else {
+            format!("?{}", params.join("&"))
+        };
+        self.request_typed(
+            Method::GET,
+            &format!("/guilds/{}/bans{}", guild_id.into(), query),
+            Option::<&Value>::None,
+        )
+        .await
+    }
+
+    pub async fn get_guild_ban(
+        &self,
+        guild_id: impl Into<Snowflake>,
+        user_id: impl Into<Snowflake>,
+    ) -> Result<Ban, DiscordError> {
+        self.request_typed(
+            Method::GET,
+            &format!("/guilds/{}/bans/{}", guild_id.into(), user_id.into()),
+            Option::<&Value>::None,
+        )
+        .await
+    }
+
+    pub async fn create_guild_ban(
+        &self,
+        guild_id: impl Into<Snowflake>,
+        user_id: impl Into<Snowflake>,
+        body: &Value,
+    ) -> Result<(), DiscordError> {
+        self.request_no_content(
+            Method::PUT,
+            &format!("/guilds/{}/bans/{}", guild_id.into(), user_id.into()),
+            Some(body),
+        )
+        .await
+    }
+
+    pub async fn remove_guild_ban(
+        &self,
+        guild_id: impl Into<Snowflake>,
+        user_id: impl Into<Snowflake>,
+    ) -> Result<(), DiscordError> {
+        self.request_no_content(
+            Method::DELETE,
+            &format!("/guilds/{}/bans/{}", guild_id.into(), user_id.into()),
+            Option::<&Value>::None,
+        )
+        .await
+    }
+
+    pub async fn modify_guild_member(
+        &self,
+        guild_id: impl Into<Snowflake>,
+        user_id: impl Into<Snowflake>,
+        body: &Value,
+    ) -> Result<(), DiscordError> {
+        self.request_no_content(
+            Method::PATCH,
+            &format!("/guilds/{}/members/{}", guild_id.into(), user_id.into()),
+            Some(body),
+        )
+        .await
+    }
+
+    pub async fn modify_current_member_nick(
+        &self,
+        guild_id: impl Into<Snowflake>,
+        nick: Option<&str>,
+    ) -> Result<(), DiscordError> {
+        let body = serde_json::json!({ "nick": nick });
+        self.request_no_content(
+            Method::PATCH,
+            &format!("/guilds/{}/members/@me", guild_id.into()),
+            Some(&body),
+        )
+        .await
+    }
+
+    pub async fn search_guild_members(
+        &self,
+        guild_id: impl Into<Snowflake>,
+        query: &str,
+        limit: Option<u64>,
+    ) -> Result<Vec<Member>, DiscordError> {
+        let encoded = query.replace(' ', "%20").replace('&', "%26");
+        let mut params = vec![format!("query={encoded}")];
+        if let Some(l) = limit {
+            params.push(format!("limit={l}"));
+        }
+        let path = format!(
+            "/guilds/{}/members/search?{}",
+            guild_id.into(),
+            params.join("&")
+        );
+        self.request_typed(Method::GET, &path, Option::<&Value>::None)
+            .await
+    }
+
+    pub async fn get_guild_audit_log(
+        &self,
+        guild_id: impl Into<Snowflake>,
+        user_id: Option<Snowflake>,
+        action_type: Option<u64>,
+        before: Option<Snowflake>,
+        limit: Option<u64>,
+    ) -> Result<serde_json::Value, DiscordError> {
+        let mut params = Vec::new();
+        if let Some(uid) = user_id {
+            params.push(format!("user_id={uid}"));
+        }
+        if let Some(at) = action_type {
+            params.push(format!("action_type={at}"));
+        }
+        if let Some(b) = before {
+            params.push(format!("before={b}"));
+        }
+        if let Some(l) = limit {
+            params.push(format!("limit={l}"));
+        }
+        let query = if params.is_empty() {
+            String::new()
+        } else {
+            format!("?{}", params.join("&"))
+        };
+        self.request(
+            Method::GET,
+            &format!("/guilds/{}/audit-logs{}", guild_id.into(), query),
+            Option::<&Value>::None,
+        )
+        .await
+    }
+
+    pub async fn modify_guild_role_positions(
+        &self,
+        guild_id: impl Into<Snowflake>,
+        body: &Value,
+    ) -> Result<Vec<Role>, DiscordError> {
+        self.request_typed(
+            Method::PATCH,
+            &format!("/guilds/{}/roles", guild_id.into()),
+            Some(body),
+        )
+        .await
+    }
+
+    pub async fn get_guild_emojis(
+        &self,
+        guild_id: impl Into<Snowflake>,
+    ) -> Result<Vec<serde_json::Value>, DiscordError> {
+        self.request_typed(
+            Method::GET,
+            &format!("/guilds/{}/emojis", guild_id.into()),
+            Option::<&Value>::None,
+        )
+        .await
+    }
+
+    pub async fn get_guild_emoji(
+        &self,
+        guild_id: impl Into<Snowflake>,
+        emoji_id: impl Into<Snowflake>,
+    ) -> Result<serde_json::Value, DiscordError> {
+        self.request(
+            Method::GET,
+            &format!("/guilds/{}/emojis/{}", guild_id.into(), emoji_id.into()),
+            Option::<&Value>::None,
+        )
+        .await
+    }
+
+    pub async fn create_guild_emoji(
+        &self,
+        guild_id: impl Into<Snowflake>,
+        body: &Value,
+    ) -> Result<serde_json::Value, DiscordError> {
+        self.request(
+            Method::POST,
+            &format!("/guilds/{}/emojis", guild_id.into()),
+            Some(body),
+        )
+        .await
+    }
+
+    pub async fn modify_guild_emoji(
+        &self,
+        guild_id: impl Into<Snowflake>,
+        emoji_id: impl Into<Snowflake>,
+        body: &Value,
+    ) -> Result<serde_json::Value, DiscordError> {
+        self.request(
+            Method::PATCH,
+            &format!("/guilds/{}/emojis/{}", guild_id.into(), emoji_id.into()),
+            Some(body),
+        )
+        .await
+    }
+
+    pub async fn delete_guild_emoji(
+        &self,
+        guild_id: impl Into<Snowflake>,
+        emoji_id: impl Into<Snowflake>,
+    ) -> Result<(), DiscordError> {
+        self.request_no_content(
+            Method::DELETE,
+            &format!("/guilds/{}/emojis/{}", guild_id.into(), emoji_id.into()),
+            Option::<&Value>::None,
+        )
+        .await
+    }
+
+    pub async fn get_application_emojis(&self) -> Result<Vec<serde_json::Value>, DiscordError> {
+        let application_id = configured_application_id(self.application_id())?;
+        let response = self
+            .request(
+                Method::GET,
+                &format!("/applications/{application_id}/emojis"),
+                Option::<&Value>::None,
+            )
+            .await?;
+        Ok(response
+            .get("items")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default())
+    }
+
+    pub async fn get_application_emoji(
+        &self,
+        emoji_id: impl Into<Snowflake>,
+    ) -> Result<serde_json::Value, DiscordError> {
+        let application_id = configured_application_id(self.application_id())?;
+        self.request(
+            Method::GET,
+            &format!("/applications/{application_id}/emojis/{}", emoji_id.into()),
+            Option::<&Value>::None,
+        )
+        .await
+    }
+
+    pub async fn create_application_emoji(
+        &self,
+        body: &Value,
+    ) -> Result<serde_json::Value, DiscordError> {
+        let application_id = configured_application_id(self.application_id())?;
+        self.request(
+            Method::POST,
+            &format!("/applications/{application_id}/emojis"),
+            Some(body),
+        )
+        .await
+    }
+
+    pub async fn modify_application_emoji(
+        &self,
+        emoji_id: impl Into<Snowflake>,
+        body: &Value,
+    ) -> Result<serde_json::Value, DiscordError> {
+        let application_id = configured_application_id(self.application_id())?;
+        self.request(
+            Method::PATCH,
+            &format!("/applications/{application_id}/emojis/{}", emoji_id.into()),
+            Some(body),
+        )
+        .await
+    }
+
+    pub async fn delete_application_emoji(
+        &self,
+        emoji_id: impl Into<Snowflake>,
+    ) -> Result<(), DiscordError> {
+        let application_id = configured_application_id(self.application_id())?;
+        self.request_no_content(
+            Method::DELETE,
+            &format!("/applications/{application_id}/emojis/{}", emoji_id.into()),
+            Option::<&Value>::None,
+        )
+        .await
+    }
+
+    pub async fn get_skus(&self) -> Result<Vec<Sku>, DiscordError> {
+        let application_id = configured_application_id(self.application_id())?;
+        self.request_typed(
+            Method::GET,
+            &format!("/applications/{application_id}/skus"),
+            Option::<&Value>::None,
+        )
+        .await
+    }
+
+    pub async fn get_sku_subscriptions(
+        &self,
+        sku_id: impl Into<Snowflake>,
+        query: &SubscriptionQuery,
+    ) -> Result<Vec<Subscription>, DiscordError> {
+        self.request_typed(
+            Method::GET,
+            &format!(
+                "/skus/{}/subscriptions{}",
+                sku_id.into(),
+                subscription_query(query)
+            ),
+            Option::<&Value>::None,
+        )
+        .await
+    }
+
+    pub async fn get_sku_subscription(
+        &self,
+        sku_id: impl Into<Snowflake>,
+        subscription_id: impl Into<Snowflake>,
+    ) -> Result<Subscription, DiscordError> {
+        self.request_typed(
+            Method::GET,
+            &format!(
+                "/skus/{}/subscriptions/{}",
+                sku_id.into(),
+                subscription_id.into()
+            ),
+            Option::<&Value>::None,
+        )
+        .await
+    }
+
+    pub async fn get_entitlements(
+        &self,
+        query: &EntitlementQuery,
+    ) -> Result<Vec<Entitlement>, DiscordError> {
+        let application_id = configured_application_id(self.application_id())?;
+        self.request_typed(
+            Method::GET,
+            &format!(
+                "/applications/{application_id}/entitlements{}",
+                entitlement_query(query)
+            ),
+            Option::<&Value>::None,
+        )
+        .await
+    }
+
+    pub async fn get_entitlement(
+        &self,
+        entitlement_id: impl Into<Snowflake>,
+    ) -> Result<Entitlement, DiscordError> {
+        let application_id = configured_application_id(self.application_id())?;
+        self.request_typed(
+            Method::GET,
+            &format!(
+                "/applications/{application_id}/entitlements/{}",
+                entitlement_id.into()
+            ),
+            Option::<&Value>::None,
+        )
+        .await
+    }
+
+    pub async fn consume_entitlement(
+        &self,
+        entitlement_id: impl Into<Snowflake>,
+    ) -> Result<(), DiscordError> {
+        let application_id = configured_application_id(self.application_id())?;
+        self.request_no_content(
+            Method::POST,
+            &format!(
+                "/applications/{application_id}/entitlements/{}/consume",
+                entitlement_id.into()
+            ),
+            Option::<&Value>::None,
+        )
+        .await
+    }
+
+    pub async fn create_test_entitlement(
+        &self,
+        body: &CreateTestEntitlement,
+    ) -> Result<Entitlement, DiscordError> {
+        let application_id = configured_application_id(self.application_id())?;
+        self.request_typed(
+            Method::POST,
+            &format!("/applications/{application_id}/entitlements"),
+            Some(body),
+        )
+        .await
+    }
+
+    pub async fn delete_test_entitlement(
+        &self,
+        entitlement_id: impl Into<Snowflake>,
+    ) -> Result<(), DiscordError> {
+        let application_id = configured_application_id(self.application_id())?;
+        self.request_no_content(
+            Method::DELETE,
+            &format!(
+                "/applications/{application_id}/entitlements/{}",
+                entitlement_id.into()
+            ),
+            Option::<&Value>::None,
+        )
+        .await
+    }
+
+    pub async fn get_sticker(
+        &self,
+        sticker_id: impl Into<Snowflake>,
+    ) -> Result<Sticker, DiscordError> {
+        self.request_typed(
+            Method::GET,
+            &format!("/stickers/{}", sticker_id.into()),
+            Option::<&Value>::None,
+        )
+        .await
+    }
+
+    pub async fn list_sticker_packs(&self) -> Result<StickerPackList, DiscordError> {
+        self.request_typed(Method::GET, "/sticker-packs", Option::<&Value>::None)
+            .await
+    }
+
+    pub async fn get_guild_stickers(
+        &self,
+        guild_id: impl Into<Snowflake>,
+    ) -> Result<Vec<Sticker>, DiscordError> {
+        self.request_typed(
+            Method::GET,
+            &format!("/guilds/{}/stickers", guild_id.into()),
+            Option::<&Value>::None,
+        )
+        .await
+    }
+
+    pub async fn get_guild_sticker(
+        &self,
+        guild_id: impl Into<Snowflake>,
+        sticker_id: impl Into<Snowflake>,
+    ) -> Result<Sticker, DiscordError> {
+        self.request_typed(
+            Method::GET,
+            &format!("/guilds/{}/stickers/{}", guild_id.into(), sticker_id.into()),
+            Option::<&Value>::None,
+        )
+        .await
+    }
+
+    pub async fn create_guild_sticker(
+        &self,
+        guild_id: impl Into<Snowflake>,
+        body: &Value,
+        file: FileAttachment,
+    ) -> Result<Sticker, DiscordError> {
+        let path = format!("/guilds/{}/stickers", guild_id.into());
+        let response = self
+            .request_with_headers(
+                Method::POST,
+                &path,
+                Some(RequestBody::StickerMultipart {
+                    payload_json: body.clone(),
+                    file,
+                }),
+            )
+            .await?;
+        serde_json::from_value(parse_body_value(response.body)).map_err(Into::into)
+    }
+
+    pub async fn modify_guild_sticker(
+        &self,
+        guild_id: impl Into<Snowflake>,
+        sticker_id: impl Into<Snowflake>,
+        body: &Value,
+    ) -> Result<Sticker, DiscordError> {
+        self.request_typed(
+            Method::PATCH,
+            &format!("/guilds/{}/stickers/{}", guild_id.into(), sticker_id.into()),
+            Some(body),
+        )
+        .await
+    }
+
+    pub async fn delete_guild_sticker(
+        &self,
+        guild_id: impl Into<Snowflake>,
+        sticker_id: impl Into<Snowflake>,
+    ) -> Result<(), DiscordError> {
+        self.request_no_content(
+            Method::DELETE,
+            &format!("/guilds/{}/stickers/{}", guild_id.into(), sticker_id.into()),
+            Option::<&Value>::None,
+        )
+        .await
+    }
+
+    pub async fn send_soundboard_sound(
+        &self,
+        channel_id: impl Into<Snowflake>,
+        body: &Value,
+    ) -> Result<(), DiscordError> {
+        self.request_no_content(
+            Method::POST,
+            &format!("/channels/{}/send-soundboard-sound", channel_id.into()),
+            Some(body),
+        )
+        .await
+    }
+
+    pub async fn list_default_soundboard_sounds(
+        &self,
+    ) -> Result<Vec<SoundboardSound>, DiscordError> {
+        self.request_typed(
+            Method::GET,
+            "/soundboard-default-sounds",
+            Option::<&Value>::None,
+        )
+        .await
+    }
+
+    pub async fn list_guild_soundboard_sounds(
+        &self,
+        guild_id: impl Into<Snowflake>,
+    ) -> Result<SoundboardSoundList, DiscordError> {
+        self.request_typed(
+            Method::GET,
+            &format!("/guilds/{}/soundboard-sounds", guild_id.into()),
+            Option::<&Value>::None,
+        )
+        .await
+    }
+
+    pub async fn get_guild_soundboard_sound(
+        &self,
+        guild_id: impl Into<Snowflake>,
+        sound_id: impl Into<Snowflake>,
+    ) -> Result<SoundboardSound, DiscordError> {
+        self.request_typed(
+            Method::GET,
+            &format!(
+                "/guilds/{}/soundboard-sounds/{}",
+                guild_id.into(),
+                sound_id.into()
+            ),
+            Option::<&Value>::None,
+        )
+        .await
+    }
+
+    pub async fn create_guild_soundboard_sound(
+        &self,
+        guild_id: impl Into<Snowflake>,
+        body: &Value,
+    ) -> Result<SoundboardSound, DiscordError> {
+        self.request_typed(
+            Method::POST,
+            &format!("/guilds/{}/soundboard-sounds", guild_id.into()),
+            Some(body),
+        )
+        .await
+    }
+
+    pub async fn modify_guild_soundboard_sound(
+        &self,
+        guild_id: impl Into<Snowflake>,
+        sound_id: impl Into<Snowflake>,
+        body: &Value,
+    ) -> Result<SoundboardSound, DiscordError> {
+        self.request_typed(
+            Method::PATCH,
+            &format!(
+                "/guilds/{}/soundboard-sounds/{}",
+                guild_id.into(),
+                sound_id.into()
+            ),
+            Some(body),
+        )
+        .await
+    }
+
+    pub async fn delete_guild_soundboard_sound(
+        &self,
+        guild_id: impl Into<Snowflake>,
+        sound_id: impl Into<Snowflake>,
+    ) -> Result<(), DiscordError> {
+        self.request_no_content(
+            Method::DELETE,
+            &format!(
+                "/guilds/{}/soundboard-sounds/{}",
+                guild_id.into(),
+                sound_id.into()
+            ),
+            Option::<&Value>::None,
+        )
+        .await
+    }
+
+    pub async fn get_guild_invites(
+        &self,
+        guild_id: impl Into<Snowflake>,
+    ) -> Result<Vec<Invite>, DiscordError> {
+        self.request_typed(
+            Method::GET,
+            &format!("/guilds/{}/invites", guild_id.into()),
+            Option::<&Value>::None,
+        )
+        .await
+    }
+
+    pub async fn get_invite(&self, code: &str) -> Result<Invite, DiscordError> {
+        self.request_typed(
+            Method::GET,
+            &format!("/invites/{code}"),
+            Option::<&Value>::None,
+        )
+        .await
+    }
+
+    pub async fn get_invite_with_options(
+        &self,
+        code: &str,
+        with_counts: Option<bool>,
+        with_expiration: Option<bool>,
+        guild_scheduled_event_id: Option<Snowflake>,
+    ) -> Result<Invite, DiscordError> {
+        self.request_typed(
+            Method::GET,
+            &format!(
+                "/invites/{code}{}",
+                invite_query(with_counts, with_expiration, guild_scheduled_event_id)
+            ),
+            Option::<&Value>::None,
+        )
+        .await
+    }
+
+    pub async fn delete_invite(&self, code: &str) -> Result<Invite, DiscordError> {
+        self.request_typed(
+            Method::DELETE,
+            &format!("/invites/{code}"),
+            Option::<&Value>::None,
+        )
+        .await
+    }
+
+    pub async fn get_guild_integrations(
+        &self,
+        guild_id: impl Into<Snowflake>,
+    ) -> Result<Vec<Integration>, DiscordError> {
+        self.request_typed(
+            Method::GET,
+            &format!("/guilds/{}/integrations", guild_id.into()),
+            Option::<&Value>::None,
+        )
+        .await
+    }
+
+    pub async fn delete_guild_integration(
+        &self,
+        guild_id: impl Into<Snowflake>,
+        integration_id: impl Into<Snowflake>,
+    ) -> Result<(), DiscordError> {
+        self.request_no_content(
+            Method::DELETE,
+            &format!(
+                "/guilds/{}/integrations/{}",
+                guild_id.into(),
+                integration_id.into()
+            ),
+            Option::<&Value>::None,
+        )
+        .await
+    }
+
+    pub async fn get_poll_answer_voters(
+        &self,
+        channel_id: impl Into<Snowflake>,
+        message_id: impl Into<Snowflake>,
+        answer_id: u64,
+        after: Option<Snowflake>,
+        limit: Option<u64>,
+    ) -> Result<PollAnswerVoters, DiscordError> {
+        self.request_typed(
+            Method::GET,
+            &format!(
+                "/channels/{}/polls/{}/answers/{answer_id}{}",
+                channel_id.into(),
+                message_id.into(),
+                poll_answer_voters_query(after, limit)
+            ),
+            Option::<&Value>::None,
+        )
+        .await
+    }
+
+    pub async fn end_poll(
+        &self,
+        channel_id: impl Into<Snowflake>,
+        message_id: impl Into<Snowflake>,
+    ) -> Result<Message, DiscordError> {
+        self.request_typed(
+            Method::POST,
+            &format!(
+                "/channels/{}/polls/{}/expire",
+                channel_id.into(),
+                message_id.into()
+            ),
+            Option::<&Value>::None,
+        )
+        .await
+    }
+
+    pub async fn create_channel_invite(
+        &self,
+        channel_id: impl Into<Snowflake>,
+        body: Option<&Value>,
+    ) -> Result<Invite, DiscordError> {
+        self.request_typed(
+            Method::POST,
+            &format!("/channels/{}/invites", channel_id.into()),
+            body,
+        )
+        .await
+    }
+
+    pub async fn get_current_user(&self) -> Result<User, DiscordError> {
+        self.request_typed(Method::GET, "/users/@me", Option::<&Value>::None)
+            .await
+    }
+
+    pub async fn get_user(&self, user_id: impl Into<Snowflake>) -> Result<User, DiscordError> {
+        self.request_typed(
+            Method::GET,
+            &format!("/users/{}", user_id.into()),
+            Option::<&Value>::None,
+        )
+        .await
+    }
+
+    pub async fn get_current_user_guilds(&self) -> Result<Vec<serde_json::Value>, DiscordError> {
+        self.request_typed(Method::GET, "/users/@me/guilds", Option::<&Value>::None)
+            .await
+    }
+
+    pub async fn leave_guild(&self, guild_id: impl Into<Snowflake>) -> Result<(), DiscordError> {
+        self.request_no_content(
+            Method::DELETE,
+            &format!("/users/@me/guilds/{}", guild_id.into()),
+            Option::<&Value>::None,
+        )
+        .await
+    }
+
+    pub async fn get_guild_webhooks(
+        &self,
+        guild_id: impl Into<Snowflake>,
+    ) -> Result<Vec<Webhook>, DiscordError> {
+        self.request_typed(
+            Method::GET,
+            &format!("/guilds/{}/webhooks", guild_id.into()),
+            Option::<&Value>::None,
+        )
+        .await
+    }
+
+    pub async fn get_webhook(
+        &self,
+        webhook_id: impl Into<Snowflake>,
+    ) -> Result<Webhook, DiscordError> {
+        self.request_typed(
+            Method::GET,
+            &format!("/webhooks/{}", webhook_id.into()),
+            Option::<&Value>::None,
+        )
+        .await
+    }
+
+    pub async fn modify_webhook(
+        &self,
+        webhook_id: impl Into<Snowflake>,
+        body: &Value,
+    ) -> Result<Webhook, DiscordError> {
+        self.request_typed(
+            Method::PATCH,
+            &format!("/webhooks/{}", webhook_id.into()),
+            Some(body),
+        )
+        .await
+    }
+
+    pub async fn delete_webhook(
+        &self,
+        webhook_id: impl Into<Snowflake>,
+    ) -> Result<(), DiscordError> {
+        self.request_no_content(
+            Method::DELETE,
+            &format!("/webhooks/{}", webhook_id.into()),
+            Option::<&Value>::None,
+        )
+        .await
+    }
+
+    pub async fn modify_webhook_with_token(
+        &self,
+        webhook_id: impl Into<Snowflake>,
+        token: &str,
+        body: &Value,
+    ) -> Result<Webhook, DiscordError> {
+        let path = format!("/webhooks/{}/{}", webhook_id.into(), token);
+        self.request_typed(Method::PATCH, &path, Some(body)).await
+    }
+
+    pub async fn delete_webhook_with_token(
+        &self,
+        webhook_id: impl Into<Snowflake>,
+        token: &str,
+    ) -> Result<(), DiscordError> {
+        let path = format!("/webhooks/{}/{}", webhook_id.into(), token);
+        self.request_no_content(Method::DELETE, &path, Option::<&Value>::None)
+            .await
+    }
+
+    pub async fn get_guild_scheduled_events(
+        &self,
+        guild_id: impl Into<Snowflake>,
+    ) -> Result<Vec<GuildScheduledEvent>, DiscordError> {
+        self.request_typed(
+            Method::GET,
+            &format!("/guilds/{}/scheduled-events", guild_id.into()),
+            Option::<&Value>::None,
+        )
+        .await
+    }
+
+    pub async fn create_guild_scheduled_event(
+        &self,
+        guild_id: impl Into<Snowflake>,
+        body: &Value,
+    ) -> Result<GuildScheduledEvent, DiscordError> {
+        self.request_typed(
+            Method::POST,
+            &format!("/guilds/{}/scheduled-events", guild_id.into()),
+            Some(body),
+        )
+        .await
+    }
+
+    pub async fn get_guild_scheduled_event(
+        &self,
+        guild_id: impl Into<Snowflake>,
+        event_id: impl Into<Snowflake>,
+    ) -> Result<GuildScheduledEvent, DiscordError> {
+        self.request_typed(
+            Method::GET,
+            &format!(
+                "/guilds/{}/scheduled-events/{}",
+                guild_id.into(),
+                event_id.into()
+            ),
+            Option::<&Value>::None,
+        )
+        .await
+    }
+
+    pub async fn modify_guild_scheduled_event(
+        &self,
+        guild_id: impl Into<Snowflake>,
+        event_id: impl Into<Snowflake>,
+        body: &Value,
+    ) -> Result<GuildScheduledEvent, DiscordError> {
+        self.request_typed(
+            Method::PATCH,
+            &format!(
+                "/guilds/{}/scheduled-events/{}",
+                guild_id.into(),
+                event_id.into()
+            ),
+            Some(body),
+        )
+        .await
+    }
+
+    pub async fn delete_guild_scheduled_event(
+        &self,
+        guild_id: impl Into<Snowflake>,
+        event_id: impl Into<Snowflake>,
+    ) -> Result<(), DiscordError> {
+        self.request_no_content(
+            Method::DELETE,
+            &format!(
+                "/guilds/{}/scheduled-events/{}",
+                guild_id.into(),
+                event_id.into()
+            ),
+            Option::<&Value>::None,
+        )
+        .await
+    }
+
+    pub async fn get_guild_scheduled_event_users(
+        &self,
+        guild_id: impl Into<Snowflake>,
+        event_id: impl Into<Snowflake>,
+        limit: Option<u64>,
+    ) -> Result<Vec<GuildScheduledEventUser>, DiscordError> {
+        let path = match limit {
+            Some(l) => format!(
+                "/guilds/{}/scheduled-events/{}/users?limit={}",
+                guild_id.into(),
+                event_id.into(),
+                l
+            ),
+            None => format!(
+                "/guilds/{}/scheduled-events/{}/users",
+                guild_id.into(),
+                event_id.into()
+            ),
+        };
+        self.request_typed(Method::GET, &path, Option::<&Value>::None)
+            .await
+    }
+
+    pub async fn get_auto_moderation_rules(
+        &self,
+        guild_id: impl Into<Snowflake>,
+    ) -> Result<Vec<serde_json::Value>, DiscordError> {
+        self.request_typed(
+            Method::GET,
+            &format!("/guilds/{}/auto-moderation/rules", guild_id.into()),
+            Option::<&Value>::None,
+        )
+        .await
+    }
+
+    pub async fn create_auto_moderation_rule(
+        &self,
+        guild_id: impl Into<Snowflake>,
+        body: &Value,
+    ) -> Result<serde_json::Value, DiscordError> {
+        self.request(
+            Method::POST,
+            &format!("/guilds/{}/auto-moderation/rules", guild_id.into()),
+            Some(body),
+        )
+        .await
+    }
+
+    pub async fn modify_auto_moderation_rule(
+        &self,
+        guild_id: impl Into<Snowflake>,
+        rule_id: impl Into<Snowflake>,
+        body: &Value,
+    ) -> Result<serde_json::Value, DiscordError> {
+        self.request(
+            Method::PATCH,
+            &format!(
+                "/guilds/{}/auto-moderation/rules/{}",
+                guild_id.into(),
+                rule_id.into()
+            ),
+            Some(body),
+        )
+        .await
+    }
+
+    pub async fn delete_auto_moderation_rule(
+        &self,
+        guild_id: impl Into<Snowflake>,
+        rule_id: impl Into<Snowflake>,
+    ) -> Result<(), DiscordError> {
+        self.request_no_content(
+            Method::DELETE,
+            &format!(
+                "/guilds/{}/auto-moderation/rules/{}",
+                guild_id.into(),
+                rule_id.into()
+            ),
+            Option::<&Value>::None,
+        )
+        .await
+    }
+
+    pub async fn get_global_command(
+        &self,
+        command_id: impl Into<Snowflake>,
+    ) -> Result<ApplicationCommand, DiscordError> {
+        let path = global_commands_path(self.application_id())?;
+        self.request_typed(
+            Method::GET,
+            &format!("{}/{}", path, command_id.into()),
+            Option::<&Value>::None,
+        )
+        .await
+    }
+
+    pub async fn edit_global_command(
+        &self,
+        command_id: impl Into<Snowflake>,
+        body: &Value,
+    ) -> Result<ApplicationCommand, DiscordError> {
+        let path = global_commands_path(self.application_id())?;
+        self.request_typed(
+            Method::PATCH,
+            &format!("{}/{}", path, command_id.into()),
+            Some(body),
+        )
+        .await
+    }
+
+    pub async fn delete_global_command(
+        &self,
+        command_id: impl Into<Snowflake>,
+    ) -> Result<(), DiscordError> {
+        let path = global_commands_path(self.application_id())?;
+        self.request_no_content(
+            Method::DELETE,
+            &format!("{}/{}", path, command_id.into()),
+            Option::<&Value>::None,
+        )
+        .await
+    }
+
+    pub async fn get_guild_commands(
+        &self,
+        guild_id: impl Into<Snowflake>,
+    ) -> Result<Vec<ApplicationCommand>, DiscordError> {
+        let application_id = configured_application_id(self.application_id())?;
+        self.request_typed(
+            Method::GET,
+            &format!(
+                "/applications/{application_id}/guilds/{}/commands",
+                guild_id.into()
+            ),
+            Option::<&Value>::None,
+        )
+        .await
+    }
+
+    pub async fn create_guild_command(
+        &self,
+        guild_id: impl Into<Snowflake>,
+        command: &CommandDefinition,
+    ) -> Result<ApplicationCommand, DiscordError> {
+        let application_id = configured_application_id(self.application_id())?;
+        self.request_typed(
+            Method::POST,
+            &format!(
+                "/applications/{application_id}/guilds/{}/commands",
+                guild_id.into()
+            ),
+            Some(command),
+        )
+        .await
+    }
+
+    pub async fn edit_guild_command(
+        &self,
+        guild_id: impl Into<Snowflake>,
+        command_id: impl Into<Snowflake>,
+        body: &Value,
+    ) -> Result<ApplicationCommand, DiscordError> {
+        let application_id = configured_application_id(self.application_id())?;
+        self.request_typed(
+            Method::PATCH,
+            &format!(
+                "/applications/{application_id}/guilds/{}/commands/{}",
+                guild_id.into(),
+                command_id.into()
+            ),
+            Some(body),
+        )
+        .await
+    }
+
+    pub async fn delete_guild_command(
+        &self,
+        guild_id: impl Into<Snowflake>,
+        command_id: impl Into<Snowflake>,
+    ) -> Result<(), DiscordError> {
+        let application_id = configured_application_id(self.application_id())?;
+        self.request_no_content(
+            Method::DELETE,
+            &format!(
+                "/applications/{application_id}/guilds/{}/commands/{}",
+                guild_id.into(),
+                command_id.into()
+            ),
+            Option::<&Value>::None,
+        )
+        .await
+    }
+
+    pub async fn get_guild_preview(
+        &self,
+        guild_id: impl Into<Snowflake>,
+    ) -> Result<serde_json::Value, DiscordError> {
+        self.request(
+            Method::GET,
+            &format!("/guilds/{}/preview", guild_id.into()),
+            Option::<&Value>::None,
+        )
+        .await
+    }
+
+    pub async fn get_guild_prune_count(
+        &self,
+        guild_id: impl Into<Snowflake>,
+        days: Option<u64>,
+        include_roles: &[Snowflake],
+    ) -> Result<serde_json::Value, DiscordError> {
+        let query = guild_prune_query(days, None, include_roles);
+        self.request(
+            Method::GET,
+            &format!("/guilds/{}/prune{query}", guild_id.into()),
+            Option::<&Value>::None,
+        )
+        .await
+    }
+
+    pub async fn begin_guild_prune(
+        &self,
+        guild_id: impl Into<Snowflake>,
+        days: Option<u64>,
+        compute_prune_count: Option<bool>,
+        include_roles: &[Snowflake],
+    ) -> Result<serde_json::Value, DiscordError> {
+        let query = guild_prune_query(days, compute_prune_count, include_roles);
+        self.request(
+            Method::POST,
+            &format!("/guilds/{}/prune{query}", guild_id.into()),
+            Option::<&Value>::None,
+        )
+        .await
+    }
+
+    pub async fn get_guild_widget_settings(
+        &self,
+        guild_id: impl Into<Snowflake>,
+    ) -> Result<GuildWidgetSettings, DiscordError> {
+        self.request_typed(
+            Method::GET,
+            &format!("/guilds/{}/widget", guild_id.into()),
+            Option::<&Value>::None,
+        )
+        .await
+    }
+
+    pub async fn modify_guild_widget_settings(
+        &self,
+        guild_id: impl Into<Snowflake>,
+        body: &Value,
+    ) -> Result<GuildWidgetSettings, DiscordError> {
+        self.request_typed(
+            Method::PATCH,
+            &format!("/guilds/{}/widget", guild_id.into()),
+            Some(body),
+        )
+        .await
+    }
+
+    pub async fn get_guild_widget(
+        &self,
+        guild_id: impl Into<Snowflake>,
+    ) -> Result<serde_json::Value, DiscordError> {
+        self.request(
+            Method::GET,
+            &format!("/guilds/{}/widget.json", guild_id.into()),
+            Option::<&Value>::None,
+        )
+        .await
+    }
+
+    pub async fn follow_announcement_channel(
+        &self,
+        channel_id: impl Into<Snowflake>,
+        webhook_channel_id: impl Into<Snowflake>,
+    ) -> Result<FollowedChannel, DiscordError> {
+        self.request_typed(
+            Method::POST,
+            &format!("/channels/{}/followers", channel_id.into()),
+            Some(&serde_json::json!({ "webhook_channel_id": webhook_channel_id.into() })),
+        )
+        .await
+    }
+
+    pub async fn create_stage_instance(&self, body: &Value) -> Result<StageInstance, DiscordError> {
+        self.request_typed(Method::POST, "/stage-instances", Some(body))
+            .await
+    }
+
+    pub async fn get_stage_instance(
+        &self,
+        channel_id: impl Into<Snowflake>,
+    ) -> Result<StageInstance, DiscordError> {
+        self.request_typed(
+            Method::GET,
+            &format!("/stage-instances/{}", channel_id.into()),
+            Option::<&Value>::None,
+        )
+        .await
+    }
+
+    pub async fn modify_stage_instance(
+        &self,
+        channel_id: impl Into<Snowflake>,
+        body: &Value,
+    ) -> Result<StageInstance, DiscordError> {
+        self.request_typed(
+            Method::PATCH,
+            &format!("/stage-instances/{}", channel_id.into()),
+            Some(body),
+        )
+        .await
+    }
+
+    pub async fn delete_stage_instance(
+        &self,
+        channel_id: impl Into<Snowflake>,
+    ) -> Result<(), DiscordError> {
+        self.request_no_content(
+            Method::DELETE,
+            &format!("/stage-instances/{}", channel_id.into()),
+            Option::<&Value>::None,
+        )
+        .await
+    }
+
+    pub async fn get_guild_welcome_screen(
+        &self,
+        guild_id: impl Into<Snowflake>,
+    ) -> Result<WelcomeScreen, DiscordError> {
+        self.request_typed(
+            Method::GET,
+            &format!("/guilds/{}/welcome-screen", guild_id.into()),
+            Option::<&Value>::None,
+        )
+        .await
+    }
+
+    pub async fn modify_guild_welcome_screen(
+        &self,
+        guild_id: impl Into<Snowflake>,
+        body: &Value,
+    ) -> Result<WelcomeScreen, DiscordError> {
+        self.request_typed(
+            Method::PATCH,
+            &format!("/guilds/{}/welcome-screen", guild_id.into()),
+            Some(body),
+        )
+        .await
+    }
+
+    pub async fn get_guild_onboarding(
+        &self,
+        guild_id: impl Into<Snowflake>,
+    ) -> Result<GuildOnboarding, DiscordError> {
+        self.request_typed(
+            Method::GET,
+            &format!("/guilds/{}/onboarding", guild_id.into()),
+            Option::<&Value>::None,
+        )
+        .await
+    }
+
+    pub async fn modify_guild_onboarding(
+        &self,
+        guild_id: impl Into<Snowflake>,
+        body: &Value,
+    ) -> Result<GuildOnboarding, DiscordError> {
+        self.request_typed(
+            Method::PUT,
+            &format!("/guilds/{}/onboarding", guild_id.into()),
+            Some(body),
+        )
+        .await
+    }
+
+    pub async fn get_guild_templates(
+        &self,
+        guild_id: impl Into<Snowflake>,
+    ) -> Result<Vec<GuildTemplate>, DiscordError> {
+        self.request_typed(
+            Method::GET,
+            &format!("/guilds/{}/templates", guild_id.into()),
+            Option::<&Value>::None,
+        )
+        .await
+    }
+
+    pub async fn create_guild_template(
+        &self,
+        guild_id: impl Into<Snowflake>,
+        body: &Value,
+    ) -> Result<GuildTemplate, DiscordError> {
+        self.request_typed(
+            Method::POST,
+            &format!("/guilds/{}/templates", guild_id.into()),
+            Some(body),
+        )
+        .await
+    }
+
+    pub async fn sync_guild_template(
+        &self,
+        guild_id: impl Into<Snowflake>,
+        template_code: &str,
+    ) -> Result<GuildTemplate, DiscordError> {
+        validate_token_path_segment("template_code", template_code, false)?;
+        self.request_typed(
+            Method::PUT,
+            &format!("/guilds/{}/templates/{template_code}", guild_id.into()),
+            Option::<&Value>::None,
+        )
+        .await
+    }
+
+    pub async fn modify_guild_template(
+        &self,
+        guild_id: impl Into<Snowflake>,
+        template_code: &str,
+        body: &Value,
+    ) -> Result<GuildTemplate, DiscordError> {
+        validate_token_path_segment("template_code", template_code, false)?;
+        self.request_typed(
+            Method::PATCH,
+            &format!("/guilds/{}/templates/{template_code}", guild_id.into()),
+            Some(body),
+        )
+        .await
+    }
+
+    pub async fn delete_guild_template(
+        &self,
+        guild_id: impl Into<Snowflake>,
+        template_code: &str,
+    ) -> Result<GuildTemplate, DiscordError> {
+        validate_token_path_segment("template_code", template_code, false)?;
+        self.request_typed(
+            Method::DELETE,
+            &format!("/guilds/{}/templates/{template_code}", guild_id.into()),
+            Option::<&Value>::None,
+        )
+        .await
+    }
+
+    pub async fn get_voice_regions(&self) -> Result<Vec<serde_json::Value>, DiscordError> {
+        self.request_typed(Method::GET, "/voice/regions", Option::<&Value>::None)
+            .await
+    }
+
     pub(crate) async fn create_interaction_response_json(
         &self,
         interaction_id: impl Into<Snowflake>,
@@ -596,6 +2522,22 @@ impl RestClient {
             .await
     }
 
+    pub async fn create_followup_message_with_files(
+        &self,
+        interaction_token: &str,
+        body: &CreateMessage,
+        files: &[FileAttachment],
+    ) -> Result<Message, DiscordError> {
+        let application_id = configured_application_id(self.application_id())?;
+        self.create_followup_message_with_application_id_and_files(
+            &application_id,
+            interaction_token,
+            body,
+            files,
+        )
+        .await
+    }
+
     pub async fn create_followup_message_with_application_id(
         &self,
         application_id: &str,
@@ -604,6 +2546,18 @@ impl RestClient {
     ) -> Result<Message, DiscordError> {
         let path = followup_webhook_path(application_id, interaction_token, None)?;
         self.request_typed(Method::POST, &path, Some(body)).await
+    }
+
+    pub async fn create_followup_message_with_application_id_and_files(
+        &self,
+        application_id: &str,
+        interaction_token: &str,
+        body: &CreateMessage,
+        files: &[FileAttachment],
+    ) -> Result<Message, DiscordError> {
+        let path = followup_webhook_path(application_id, interaction_token, None)?;
+        self.request_typed_multipart(Method::POST, &path, body, files)
+            .await
     }
 
     pub async fn get_original_interaction_response(
@@ -642,6 +2596,22 @@ impl RestClient {
         .await
     }
 
+    pub async fn edit_original_interaction_response_with_files(
+        &self,
+        interaction_token: &str,
+        body: &CreateMessage,
+        files: &[FileAttachment],
+    ) -> Result<Message, DiscordError> {
+        let application_id = configured_application_id(self.application_id())?;
+        self.edit_original_interaction_response_with_application_id_and_files(
+            &application_id,
+            interaction_token,
+            body,
+            files,
+        )
+        .await
+    }
+
     pub async fn edit_original_interaction_response_with_application_id(
         &self,
         application_id: &str,
@@ -650,6 +2620,18 @@ impl RestClient {
     ) -> Result<Message, DiscordError> {
         let path = followup_webhook_path(application_id, interaction_token, Some("@original"))?;
         self.request_typed(Method::PATCH, &path, Some(body)).await
+    }
+
+    pub async fn edit_original_interaction_response_with_application_id_and_files(
+        &self,
+        application_id: &str,
+        interaction_token: &str,
+        body: &CreateMessage,
+        files: &[FileAttachment],
+    ) -> Result<Message, DiscordError> {
+        let path = followup_webhook_path(application_id, interaction_token, Some("@original"))?;
+        self.request_typed_multipart(Method::PATCH, &path, body, files)
+            .await
     }
 
     pub async fn delete_original_interaction_response(
@@ -690,6 +2672,24 @@ impl RestClient {
         .await
     }
 
+    pub async fn edit_followup_message_with_files(
+        &self,
+        interaction_token: &str,
+        message_id: &str,
+        body: &CreateMessage,
+        files: &[FileAttachment],
+    ) -> Result<Message, DiscordError> {
+        let application_id = configured_application_id(self.application_id())?;
+        self.edit_followup_message_with_application_id_and_files(
+            &application_id,
+            interaction_token,
+            message_id,
+            body,
+            files,
+        )
+        .await
+    }
+
     pub async fn edit_followup_message_with_application_id(
         &self,
         application_id: &str,
@@ -699,6 +2699,19 @@ impl RestClient {
     ) -> Result<Message, DiscordError> {
         let path = followup_webhook_path(application_id, interaction_token, Some(message_id))?;
         self.request_typed(Method::PATCH, &path, Some(body)).await
+    }
+
+    pub async fn edit_followup_message_with_application_id_and_files(
+        &self,
+        application_id: &str,
+        interaction_token: &str,
+        message_id: &str,
+        body: &CreateMessage,
+        files: &[FileAttachment],
+    ) -> Result<Message, DiscordError> {
+        let path = followup_webhook_path(application_id, interaction_token, Some(message_id))?;
+        self.request_typed_multipart(Method::PATCH, &path, body, files)
+            .await
     }
 
     pub async fn delete_followup_message(
@@ -733,7 +2746,27 @@ impl RestClient {
         body: Option<&Value>,
     ) -> Result<Value, DiscordError> {
         let response = self
-            .request_with_headers(method, path, body.map(clone_json_body))
+            .request_with_headers(
+                method,
+                path,
+                body.map(clone_json_body).map(RequestBody::Json),
+            )
+            .await?;
+        Ok(parse_body_value(response.body))
+    }
+
+    pub async fn request_multipart<B>(
+        &self,
+        method: Method,
+        path: &str,
+        body: &B,
+        files: &[FileAttachment],
+    ) -> Result<Value, DiscordError>
+    where
+        B: serde::Serialize + ?Sized,
+    {
+        let response = self
+            .request_with_headers(method, path, Some(multipart_body(body, files)))
             .await?;
         Ok(parse_body_value(response.body))
     }
@@ -749,7 +2782,29 @@ impl RestClient {
         B: serde::Serialize + ?Sized,
     {
         let response = self
-            .request_with_headers(method, path, body.map(serialize_body))
+            .request_with_headers(
+                method,
+                path,
+                body.map(serialize_body).map(RequestBody::Json),
+            )
+            .await?;
+        let value = parse_body_value(response.body);
+        serde_json::from_value(value).map_err(Into::into)
+    }
+
+    pub async fn request_typed_multipart<T, B>(
+        &self,
+        method: Method,
+        path: &str,
+        body: &B,
+        files: &[FileAttachment],
+    ) -> Result<T, DiscordError>
+    where
+        T: DeserializeOwned,
+        B: serde::Serialize + ?Sized,
+    {
+        let response = self
+            .request_with_headers(method, path, Some(multipart_body(body, files)))
             .await?;
         let value = parse_body_value(response.body);
         serde_json::from_value(value).map_err(Into::into)
@@ -764,7 +2819,26 @@ impl RestClient {
     where
         B: serde::Serialize + ?Sized,
     {
-        self.request_with_headers(method, path, body.map(serialize_body))
+        self.request_with_headers(
+            method,
+            path,
+            body.map(serialize_body).map(RequestBody::Json),
+        )
+        .await?;
+        Ok(())
+    }
+
+    async fn request_multipart_no_content<B>(
+        &self,
+        method: Method,
+        path: &str,
+        body: &B,
+        files: &[FileAttachment],
+    ) -> Result<(), DiscordError>
+    where
+        B: serde::Serialize + ?Sized,
+    {
+        self.request_with_headers(method, path, Some(multipart_body(body, files)))
             .await?;
         Ok(())
     }
@@ -773,7 +2847,7 @@ impl RestClient {
         &self,
         method: Method,
         path: &str,
-        body: Option<Value>,
+        body: Option<RequestBody>,
     ) -> Result<RawResponse, DiscordError> {
         let route_key = rate_limit_route_key(&method, path);
         while let Some(wait_duration) = self.rate_limits.wait_duration(&route_key) {
@@ -826,7 +2900,7 @@ impl RestClient {
         &self,
         method: Method,
         path: &str,
-        body: Option<&Value>,
+        body: Option<&RequestBody>,
     ) -> Result<RawResponse, DiscordError> {
         let normalized_path = if path.starts_with('/') {
             path.to_string()
@@ -838,8 +2912,17 @@ impl RestClient {
         let mut request_builder = self
             .client
             .request(method, url)
-            .header("Content-Type", "application/json")
-            .header("User-Agent", "DiscordBot (discordrs, 1.0.0)");
+            .header(
+                "User-Agent",
+                concat!("DiscordBot (discordrs, ", env!("CARGO_PKG_VERSION"), ")"),
+            );
+
+        if !matches!(
+            body,
+            Some(RequestBody::Multipart { .. } | RequestBody::StickerMultipart { .. })
+        ) {
+            request_builder = request_builder.header("Content-Type", "application/json");
+        }
 
         if request_uses_bot_authorization(&normalized_path) {
             request_builder =
@@ -847,7 +2930,16 @@ impl RestClient {
         }
 
         if let Some(body) = body {
-            request_builder = request_builder.json(body);
+            request_builder = match body {
+                RequestBody::Json(value) => request_builder.json(value),
+                RequestBody::Multipart {
+                    payload_json,
+                    files,
+                } => request_builder.multipart(build_multipart_form(payload_json, files)?),
+                RequestBody::StickerMultipart { payload_json, file } => {
+                    request_builder.multipart(build_sticker_form(payload_json, file)?)
+                }
+            };
         }
 
         let response = request_builder.send().await?;
@@ -867,6 +2959,18 @@ struct RawResponse {
     status: StatusCode,
     headers: HeaderMap,
     body: String,
+}
+
+enum RequestBody {
+    Json(Value),
+    Multipart {
+        payload_json: Value,
+        files: Vec<FileAttachment>,
+    },
+    StickerMultipart {
+        payload_json: Value,
+        file: FileAttachment,
+    },
 }
 
 #[derive(Default)]
@@ -979,6 +3083,54 @@ fn serialize_body<T: serde::Serialize + ?Sized>(body: &T) -> Value {
     serde_json::to_value(body).expect("failed to serialize request body")
 }
 
+fn multipart_body<T: serde::Serialize + ?Sized>(body: &T, files: &[FileAttachment]) -> RequestBody {
+    RequestBody::Multipart {
+        payload_json: serialize_body(body),
+        files: files.to_vec(),
+    }
+}
+
+fn build_multipart_form(
+    payload_json: &Value,
+    files: &[FileAttachment],
+) -> Result<Form, DiscordError> {
+    let payload_json = serde_json::to_string(payload_json)?;
+    let mut form = Form::new().text("payload_json", payload_json);
+
+    for (index, file) in files.iter().enumerate() {
+        if file.filename.trim().is_empty() {
+            return Err(invalid_data_error("file filename must not be empty"));
+        }
+
+        let mut part = Part::bytes(file.data.clone()).file_name(file.filename.clone());
+        if let Some(content_type) = &file.content_type {
+            part = part.mime_str(content_type)?;
+        }
+        form = form.part(format!("files[{index}]"), part);
+    }
+
+    Ok(form)
+}
+
+fn build_sticker_form(payload_json: &Value, file: &FileAttachment) -> Result<Form, DiscordError> {
+    if file.filename.trim().is_empty() {
+        return Err(invalid_data_error("file filename must not be empty"));
+    }
+
+    let mut form = Form::new();
+    for field in ["name", "description", "tags"] {
+        if let Some(value) = payload_json.get(field).and_then(Value::as_str) {
+            form = form.text(field.to_string(), value.to_string());
+        }
+    }
+
+    let mut part = Part::bytes(file.data.clone()).file_name(file.filename.clone());
+    if let Some(content_type) = &file.content_type {
+        part = part.mime_str(content_type)?;
+    }
+    Ok(form.part("file", part))
+}
+
 fn clone_json_body(body: &Value) -> Value {
     body.clone()
 }
@@ -1046,6 +3198,182 @@ fn interaction_callback_path(
 fn execute_webhook_path(webhook_id: Snowflake, token: &str) -> Result<String, DiscordError> {
     validate_token_path_segment("webhook_token", token, false)?;
     Ok(format!("/webhooks/{webhook_id}/{token}?wait=true"))
+}
+
+fn webhook_message_path(
+    webhook_id: Snowflake,
+    token: &str,
+    message_id: &str,
+) -> Result<String, DiscordError> {
+    validate_token_path_segment("webhook_token", token, false)?;
+    validate_token_path_segment("message_id", message_id, true)?;
+    Ok(format!(
+        "/webhooks/{webhook_id}/{token}/messages/{message_id}"
+    ))
+}
+
+fn guild_prune_query(
+    days: Option<u64>,
+    compute_prune_count: Option<bool>,
+    include_roles: &[Snowflake],
+) -> String {
+    let mut params = Vec::new();
+    if let Some(days) = days {
+        params.push(format!("days={days}"));
+    }
+    if let Some(compute_prune_count) = compute_prune_count {
+        params.push(format!("compute_prune_count={compute_prune_count}"));
+    }
+    if !include_roles.is_empty() {
+        let roles = include_roles
+            .iter()
+            .map(Snowflake::as_str)
+            .collect::<Vec<_>>()
+            .join(",");
+        params.push(format!("include_roles={roles}"));
+    }
+
+    if params.is_empty() {
+        String::new()
+    } else {
+        format!("?{}", params.join("&"))
+    }
+}
+
+fn query_string(params: Vec<String>) -> String {
+    if params.is_empty() {
+        String::new()
+    } else {
+        format!("?{}", params.join("&"))
+    }
+}
+
+fn bool_query(name: &str, value: Option<bool>) -> String {
+    query_string(
+        value
+            .map(|value| vec![format!("{name}={value}")])
+            .unwrap_or_default(),
+    )
+}
+
+fn thread_member_query(query: &ThreadMemberQuery) -> String {
+    let mut params = Vec::new();
+    if let Some(with_member) = query.with_member {
+        params.push(format!("with_member={with_member}"));
+    }
+    if let Some(after) = &query.after {
+        params.push(format!("after={after}"));
+    }
+    if let Some(limit) = query.limit {
+        params.push(format!("limit={limit}"));
+    }
+    query_string(params)
+}
+
+fn archived_threads_query(query: &ArchivedThreadsQuery) -> String {
+    let mut params = Vec::new();
+    if let Some(before) = &query.before {
+        params.push(format!("before={before}"));
+    }
+    if let Some(limit) = query.limit {
+        params.push(format!("limit={limit}"));
+    }
+    query_string(params)
+}
+
+fn joined_archived_threads_query(query: &JoinedArchivedThreadsQuery) -> String {
+    let mut params = Vec::new();
+    if let Some(before) = &query.before {
+        params.push(format!("before={before}"));
+    }
+    if let Some(limit) = query.limit {
+        params.push(format!("limit={limit}"));
+    }
+    query_string(params)
+}
+
+fn entitlement_query(query: &EntitlementQuery) -> String {
+    let mut params = Vec::new();
+    if let Some(user_id) = &query.user_id {
+        params.push(format!("user_id={user_id}"));
+    }
+    if !query.sku_ids.is_empty() {
+        let sku_ids = query
+            .sku_ids
+            .iter()
+            .map(Snowflake::as_str)
+            .collect::<Vec<_>>()
+            .join(",");
+        params.push(format!("sku_ids={sku_ids}"));
+    }
+    if let Some(before) = &query.before {
+        params.push(format!("before={before}"));
+    }
+    if let Some(after) = &query.after {
+        params.push(format!("after={after}"));
+    }
+    if let Some(limit) = query.limit {
+        params.push(format!("limit={limit}"));
+    }
+    if let Some(guild_id) = &query.guild_id {
+        params.push(format!("guild_id={guild_id}"));
+    }
+    if let Some(exclude_ended) = query.exclude_ended {
+        params.push(format!("exclude_ended={exclude_ended}"));
+    }
+    if let Some(exclude_deleted) = query.exclude_deleted {
+        params.push(format!("exclude_deleted={exclude_deleted}"));
+    }
+
+    query_string(params)
+}
+
+fn subscription_query(query: &SubscriptionQuery) -> String {
+    let mut params = Vec::new();
+    if let Some(before) = &query.before {
+        params.push(format!("before={before}"));
+    }
+    if let Some(after) = &query.after {
+        params.push(format!("after={after}"));
+    }
+    if let Some(limit) = query.limit {
+        params.push(format!("limit={limit}"));
+    }
+    if let Some(user_id) = &query.user_id {
+        params.push(format!("user_id={user_id}"));
+    }
+    query_string(params)
+}
+
+fn invite_query(
+    with_counts: Option<bool>,
+    with_expiration: Option<bool>,
+    guild_scheduled_event_id: Option<Snowflake>,
+) -> String {
+    let mut params = Vec::new();
+    if let Some(with_counts) = with_counts {
+        params.push(format!("with_counts={with_counts}"));
+    }
+    if let Some(with_expiration) = with_expiration {
+        params.push(format!("with_expiration={with_expiration}"));
+    }
+    if let Some(guild_scheduled_event_id) = guild_scheduled_event_id {
+        params.push(format!(
+            "guild_scheduled_event_id={guild_scheduled_event_id}"
+        ));
+    }
+    query_string(params)
+}
+
+fn poll_answer_voters_query(after: Option<Snowflake>, limit: Option<u64>) -> String {
+    let mut params = Vec::new();
+    if let Some(after) = after {
+        params.push(format!("after={after}"));
+    }
+    if let Some(limit) = limit {
+        params.push(format!("limit={limit}"));
+    }
+    query_string(params)
 }
 
 fn followup_webhook_path(
@@ -1144,37 +3472,7 @@ fn header_string(value: Option<&HeaderValue>) -> Option<String> {
 
 async fn sleep_for_retry_after(retry_after_seconds: f64) {
     let duration = Duration::from_secs_f64(retry_after_seconds.max(0.0));
-    let finished = Arc::new(AtomicBool::new(false));
-    let waker = Arc::new(Mutex::new(None::<Waker>));
-
-    let finished_for_thread = Arc::clone(&finished);
-    let waker_for_thread = Arc::clone(&waker);
-    std::thread::spawn(move || {
-        std::thread::sleep(duration);
-        finished_for_thread.store(true, Ordering::Release);
-        if let Ok(mut slot) = waker_for_thread.lock() {
-            if let Some(waker) = slot.take() {
-                waker.wake();
-            }
-        }
-    });
-
-    poll_fn(move |cx| {
-        if finished.load(Ordering::Acquire) {
-            return Poll::Ready(());
-        }
-
-        if let Ok(mut slot) = waker.lock() {
-            *slot = Some(cx.waker().clone());
-        }
-
-        if finished.load(Ordering::Acquire) {
-            Poll::Ready(())
-        } else {
-            Poll::Pending
-        }
-    })
-    .await;
+    tokio::time::sleep(duration).await;
 }
 
 #[cfg(test)]
@@ -1184,15 +3482,21 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use super::{
-        configured_application_id, discord_api_error, discord_rate_limit_error,
-        execute_webhook_path, followup_webhook_path, global_commands_path, header_string,
-        interaction_callback_path, parse_body_value, rate_limit_route_key,
-        request_uses_bot_authorization, sleep_for_retry_after, validate_token_path_segment,
+        archived_threads_query, configured_application_id, discord_api_error,
+        discord_rate_limit_error, execute_webhook_path, followup_webhook_path,
+        global_commands_path, header_string, interaction_callback_path, invite_query,
+        joined_archived_threads_query, parse_body_value, poll_answer_voters_query,
+        rate_limit_route_key, request_uses_bot_authorization, sleep_for_retry_after,
+        subscription_query, thread_member_query, validate_token_path_segment, FileAttachment,
         RateLimitState, RestClient,
     };
     use crate::command::{command_type, CommandDefinition};
     use crate::error::DiscordError;
-    use crate::model::{CreateMessage, InteractionCallbackResponse, Snowflake};
+    use crate::model::{
+        ArchivedThreadsQuery, CreateMessage, CreateTestEntitlement, EntitlementQuery,
+        InteractionCallbackResponse, JoinedArchivedThreadsQuery, Snowflake, SubscriptionQuery,
+        ThreadMemberQuery,
+    };
     use reqwest::header::{HeaderMap, HeaderValue};
     use reqwest::{Method, StatusCode};
     use serde_json::json;
@@ -1388,6 +3692,125 @@ mod tests {
         })
     }
 
+    fn sticker_payload(id: &str) -> serde_json::Value {
+        json!({
+            "id": id,
+            "name": "sticker",
+            "tags": "tag",
+            "type": 2,
+            "format_type": 1
+        })
+    }
+
+    fn stage_payload(channel_id: &str) -> serde_json::Value {
+        json!({
+            "id": "9000",
+            "guild_id": "200",
+            "channel_id": channel_id,
+            "topic": "town hall",
+            "privacy_level": 2
+        })
+    }
+
+    fn welcome_screen_payload() -> serde_json::Value {
+        json!({
+            "description": "welcome",
+            "welcome_channels": [{
+                "channel_id": "300",
+                "description": "rules",
+                "emoji_name": "wave"
+            }]
+        })
+    }
+
+    fn onboarding_payload() -> serde_json::Value {
+        json!({
+            "guild_id": "200",
+            "prompts": [],
+            "default_channel_ids": ["300"],
+            "enabled": true,
+            "mode": 1
+        })
+    }
+
+    fn template_payload(code: &str) -> serde_json::Value {
+        json!({
+            "code": code,
+            "name": "template",
+            "usage_count": 0,
+            "created_at": "2026-01-01T00:00:00.000000+00:00",
+            "updated_at": "2026-01-01T00:00:00.000000+00:00"
+        })
+    }
+
+    fn scheduled_event_payload(id: &str) -> serde_json::Value {
+        json!({
+            "id": id,
+            "guild_id": "200",
+            "channel_id": "300",
+            "creator_id": "400",
+            "name": "community night",
+            "description": "games",
+            "scheduled_start_time": "2026-05-01T00:00:00.000000+00:00",
+            "scheduled_end_time": "2026-05-01T01:00:00.000000+00:00",
+            "privacy_level": 2,
+            "status": 1,
+            "entity_type": 2,
+            "entity_metadata": { "location": "Stage" },
+            "user_count": 5
+        })
+    }
+
+    fn sku_payload(id: &str) -> serde_json::Value {
+        json!({
+            "id": id,
+            "type": 5,
+            "application_id": "555",
+            "name": "Premium",
+            "slug": "premium",
+            "flags": 128
+        })
+    }
+
+    fn entitlement_payload(id: &str) -> serde_json::Value {
+        json!({
+            "id": id,
+            "sku_id": "900",
+            "application_id": "555",
+            "user_id": "777",
+            "type": 8,
+            "deleted": false,
+            "consumed": false,
+            "starts_at": "2026-01-01T00:00:00.000000+00:00",
+            "ends_at": "2026-02-01T00:00:00.000000+00:00",
+            "guild_id": "200"
+        })
+    }
+
+    fn subscription_payload(id: &str) -> serde_json::Value {
+        json!({
+            "id": id,
+            "user_id": "777",
+            "sku_ids": ["900"],
+            "entitlement_ids": ["901"],
+            "current_period_start": "2026-04-01T00:00:00.000000+00:00",
+            "current_period_end": "2026-05-01T00:00:00.000000+00:00",
+            "status": 0,
+            "canceled_at": null
+        })
+    }
+
+    fn soundboard_payload(id: &str) -> serde_json::Value {
+        json!({
+            "name": "quack",
+            "sound_id": id,
+            "volume": 1.0,
+            "emoji_name": "duck",
+            "guild_id": "200",
+            "available": true
+        })
+    }
+
     fn role_payload(id: &str, name: &str) -> serde_json::Value {
         json!({
             "id": id,
@@ -1428,9 +3851,41 @@ mod tests {
         assert_eq!(request.header("authorization"), expected_authorization);
         assert_eq!(
             request.header("user-agent"),
-            Some("DiscordBot (discordrs, 1.0.0)")
+            Some(concat!(
+                "DiscordBot (discordrs, ",
+                env!("CARGO_PKG_VERSION"),
+                ")"
+            ))
         );
         assert_eq!(request.header("content-type"), Some("application/json"));
+    }
+
+    fn assert_multipart_request(
+        request: &RecordedRequest,
+        method: &str,
+        path: &str,
+        expected_authorization: Option<&str>,
+    ) {
+        assert_eq!(request.method, method);
+        assert_eq!(request.path, path);
+        assert_eq!(request.header("authorization"), expected_authorization);
+        assert_eq!(
+            request.header("user-agent"),
+            Some(concat!(
+                "DiscordBot (discordrs, ",
+                env!("CARGO_PKG_VERSION"),
+                ")"
+            ))
+        );
+        assert!(
+            request
+                .header("content-type")
+                .is_some_and(|value| value.starts_with("multipart/form-data; boundary=")),
+            "expected multipart content-type, got {:?}",
+            request.header("content-type")
+        );
+        assert!(request.body.contains(r#"name="payload_json""#));
+        assert!(request.body.contains(r#"name="files[0]""#));
     }
 
     fn sample_command() -> CommandDefinition {
@@ -1454,6 +3909,10 @@ mod tests {
             kind: 4,
             data: Some(json!({ "content": "ack" })),
         }
+    }
+
+    fn sample_file(name: &str, data: &str) -> FileAttachment {
+        FileAttachment::new(name, data.as_bytes().to_vec()).with_content_type("text/plain")
     }
 
     fn assert_model_error_contains(error: DiscordError, expected: &str) {
@@ -1736,6 +4195,49 @@ mod tests {
     }
 
     #[test]
+    fn new_coverage_query_helpers_build_expected_paths() {
+        assert_eq!(
+            thread_member_query(&ThreadMemberQuery {
+                with_member: Some(true),
+                after: Some(Snowflake::from("10")),
+                limit: Some(25),
+            }),
+            "?with_member=true&after=10&limit=25"
+        );
+        assert_eq!(
+            archived_threads_query(&ArchivedThreadsQuery {
+                before: Some("2026-04-29T00:00:00Z".to_string()),
+                limit: Some(50),
+            }),
+            "?before=2026-04-29T00:00:00Z&limit=50"
+        );
+        assert_eq!(
+            joined_archived_threads_query(&JoinedArchivedThreadsQuery {
+                before: Some(Snowflake::from("11")),
+                limit: Some(10),
+            }),
+            "?before=11&limit=10"
+        );
+        assert_eq!(
+            subscription_query(&SubscriptionQuery {
+                before: Some(Snowflake::from("20")),
+                after: Some(Snowflake::from("21")),
+                limit: Some(100),
+                user_id: Some(Snowflake::from("22")),
+            }),
+            "?before=20&after=21&limit=100&user_id=22"
+        );
+        assert_eq!(
+            invite_query(Some(true), Some(false), Some(Snowflake::from("30"))),
+            "?with_counts=true&with_expiration=false&guild_scheduled_event_id=30"
+        );
+        assert_eq!(
+            poll_answer_voters_query(Some(Snowflake::from("40")), Some(15)),
+            "?after=40&limit=15"
+        );
+    }
+
+    #[test]
     fn rate_limit_state_observe_tracks_buckets_and_global_limits() {
         let state = RateLimitState::default();
         let route_key = "POST:channels/123/messages";
@@ -1802,6 +4304,1107 @@ mod tests {
         let start = Instant::now();
         sleep_for_retry_after(0.01).await;
         assert!(start.elapsed() >= Duration::from_millis(5));
+    }
+
+    #[tokio::test]
+    async fn channel_message_file_helpers_send_multipart_payloads() {
+        let responses = vec![
+            PlannedResponse::json(StatusCode::OK, message_payload("701", "100", "created")),
+            PlannedResponse::json(StatusCode::OK, message_payload("702", "100", "updated")),
+        ];
+        let (base_url, captured, server) = spawn_test_server(responses).await;
+        let client = RestClient::new_with_base_url("file-token", 123, base_url);
+        let body = sample_message();
+        let files = vec![sample_file("hello.txt", "hello file")];
+
+        assert_eq!(
+            client
+                .create_message_with_files(Snowflake::from("100"), &body, &files)
+                .await
+                .expect("create message with files")
+                .content,
+            "created"
+        );
+        assert_eq!(
+            client
+                .update_message_with_files(
+                    Snowflake::from("100"),
+                    Snowflake::from("701"),
+                    &body,
+                    &files,
+                )
+                .await
+                .expect("update message with files")
+                .content,
+            "updated"
+        );
+
+        server.await.expect("server finished");
+        let requests = captured.lock().expect("captured requests");
+        assert_eq!(requests.len(), 2);
+        assert_multipart_request(
+            &requests[0],
+            "POST",
+            "/channels/100/messages",
+            Some("Bot file-token"),
+        );
+        assert!(requests[0].body.contains(r#"{"content":"hello"}"#));
+        assert!(requests[0].body.contains(r#"filename="hello.txt""#));
+        assert!(requests[0].body.contains("Content-Type: text/plain"));
+        assert!(requests[0].body.contains("hello file"));
+        assert_multipart_request(
+            &requests[1],
+            "PATCH",
+            "/channels/100/messages/701",
+            Some("Bot file-token"),
+        );
+        assert!(requests[1].body.contains(r#"filename="hello.txt""#));
+    }
+
+    #[tokio::test]
+    async fn tokenized_file_helpers_send_multipart_without_bot_authorization() {
+        let responses = vec![
+            PlannedResponse::json(StatusCode::OK, json!({ "id": "800" })),
+            PlannedResponse::empty(StatusCode::NO_CONTENT),
+            PlannedResponse::json(StatusCode::OK, message_payload("801", "500", "followup")),
+            PlannedResponse::json(StatusCode::OK, message_payload("802", "500", "original")),
+            PlannedResponse::json(
+                StatusCode::OK,
+                message_payload("803", "500", "followup-edit"),
+            ),
+        ];
+        let (base_url, captured, server) = spawn_test_server(responses).await;
+        let client = RestClient::new_with_base_url("bot-token", 123, base_url);
+        let body = sample_message();
+        let files = vec![sample_file("tokenized.txt", "tokenized file")];
+
+        assert_eq!(
+            client
+                .execute_webhook_with_files(
+                    Snowflake::from("777"),
+                    "token",
+                    &json!({ "content": "webhook" }),
+                    &files,
+                )
+                .await
+                .expect("execute webhook with files")["id"],
+            json!("800")
+        );
+        client
+            .create_interaction_response_with_files(
+                Snowflake::from("778"),
+                "token",
+                &sample_interaction_response(),
+                &files,
+            )
+            .await
+            .expect("create interaction response with files");
+        assert_eq!(
+            client
+                .create_followup_message_with_files("token", &body, &files)
+                .await
+                .expect("create followup with files")
+                .content,
+            "followup"
+        );
+        assert_eq!(
+            client
+                .edit_original_interaction_response_with_files("token", &body, &files)
+                .await
+                .expect("edit original with files")
+                .content,
+            "original"
+        );
+        assert_eq!(
+            client
+                .edit_followup_message_with_files("token", "55", &body, &files)
+                .await
+                .expect("edit followup with files")
+                .content,
+            "followup-edit"
+        );
+
+        server.await.expect("server finished");
+        let requests = captured.lock().expect("captured requests");
+        assert_eq!(requests.len(), 5);
+        assert_multipart_request(&requests[0], "POST", "/webhooks/777/token?wait=true", None);
+        assert_multipart_request(
+            &requests[1],
+            "POST",
+            "/interactions/778/token/callback",
+            None,
+        );
+        assert_multipart_request(&requests[2], "POST", "/webhooks/123/token", None);
+        assert_multipart_request(
+            &requests[3],
+            "PATCH",
+            "/webhooks/123/token/messages/@original",
+            None,
+        );
+        assert_multipart_request(
+            &requests[4],
+            "PATCH",
+            "/webhooks/123/token/messages/55",
+            None,
+        );
+        assert!(requests[0].body.contains(r#"{"content":"webhook"}"#));
+        assert!(requests[1].body.contains(r#""type":4"#));
+        assert!(requests[4].body.contains("tokenized file"));
+    }
+
+    #[tokio::test]
+    async fn webhook_message_crud_uses_tokenized_message_paths() {
+        let responses = vec![
+            PlannedResponse::json(StatusCode::OK, message_payload("900", "500", "webhook")),
+            PlannedResponse::json(StatusCode::OK, message_payload("900", "500", "edited")),
+            PlannedResponse::json(StatusCode::OK, message_payload("900", "500", "edited-file")),
+            PlannedResponse::empty(StatusCode::NO_CONTENT),
+        ];
+        let (base_url, captured, server) = spawn_test_server(responses).await;
+        let client = RestClient::new_with_base_url("bot-token", 123, base_url);
+        let body = sample_message();
+        let files = vec![sample_file("webhook.txt", "webhook file")];
+
+        assert_eq!(
+            client
+                .get_webhook_message(Snowflake::from("777"), "token", "900")
+                .await
+                .expect("get webhook message")
+                .content,
+            "webhook"
+        );
+        assert_eq!(
+            client
+                .edit_webhook_message(Snowflake::from("777"), "token", "900", &body)
+                .await
+                .expect("edit webhook message")
+                .content,
+            "edited"
+        );
+        assert_eq!(
+            client
+                .edit_webhook_message_with_files(
+                    Snowflake::from("777"),
+                    "token",
+                    "900",
+                    &body,
+                    &files,
+                )
+                .await
+                .expect("edit webhook message with files")
+                .content,
+            "edited-file"
+        );
+        client
+            .delete_webhook_message(Snowflake::from("777"), "token", "900")
+            .await
+            .expect("delete webhook message");
+
+        server.await.expect("server finished");
+        let requests = captured.lock().expect("captured requests");
+        assert_eq!(requests.len(), 4);
+        assert_request_basics(
+            &requests[0],
+            "GET",
+            "/webhooks/777/token/messages/900",
+            None,
+        );
+        assert_request_basics(
+            &requests[1],
+            "PATCH",
+            "/webhooks/777/token/messages/900",
+            None,
+        );
+        assert_multipart_request(
+            &requests[2],
+            "PATCH",
+            "/webhooks/777/token/messages/900",
+            None,
+        );
+        assert_request_basics(
+            &requests[3],
+            "DELETE",
+            "/webhooks/777/token/messages/900",
+            None,
+        );
+        assert!(requests[2].body.contains("webhook file"));
+    }
+
+    #[tokio::test]
+    async fn sticker_stage_and_guild_admin_wrappers_hit_expected_paths() {
+        let responses = vec![
+            PlannedResponse::json(StatusCode::OK, json!({ "items": [{ "id": "1" }] })),
+            PlannedResponse::json(StatusCode::OK, json!({ "id": "1" })),
+            PlannedResponse::json(StatusCode::OK, json!({ "id": "2" })),
+            PlannedResponse::json(StatusCode::OK, json!({ "id": "2", "name": "renamed" })),
+            PlannedResponse::empty(StatusCode::NO_CONTENT),
+            PlannedResponse::json(StatusCode::OK, sticker_payload("10")),
+            PlannedResponse::json(
+                StatusCode::OK,
+                json!({
+                    "sticker_packs": [{
+                        "id": "20",
+                        "name": "pack",
+                        "stickers": [sticker_payload("10")]
+                    }]
+                }),
+            ),
+            PlannedResponse::json(StatusCode::OK, json!([sticker_payload("11")])),
+            PlannedResponse::json(StatusCode::OK, sticker_payload("11")),
+            PlannedResponse::json(StatusCode::OK, sticker_payload("12")),
+            PlannedResponse::json(StatusCode::OK, sticker_payload("12")),
+            PlannedResponse::empty(StatusCode::NO_CONTENT),
+            PlannedResponse::json(StatusCode::OK, json!({ "pruned": 3 })),
+            PlannedResponse::json(StatusCode::OK, json!({ "pruned": 2 })),
+            PlannedResponse::json(
+                StatusCode::OK,
+                json!({ "enabled": true, "channel_id": "300" }),
+            ),
+            PlannedResponse::json(StatusCode::OK, json!({ "enabled": false })),
+            PlannedResponse::json(StatusCode::OK, json!({ "id": "200", "name": "widget" })),
+            PlannedResponse::json(
+                StatusCode::OK,
+                json!({ "channel_id": "100", "webhook_id": "101" }),
+            ),
+            PlannedResponse::json(StatusCode::OK, stage_payload("400")),
+            PlannedResponse::json(StatusCode::OK, stage_payload("400")),
+            PlannedResponse::json(StatusCode::OK, stage_payload("400")),
+            PlannedResponse::empty(StatusCode::NO_CONTENT),
+            PlannedResponse::json(StatusCode::OK, welcome_screen_payload()),
+            PlannedResponse::json(StatusCode::OK, welcome_screen_payload()),
+            PlannedResponse::json(StatusCode::OK, onboarding_payload()),
+            PlannedResponse::json(StatusCode::OK, onboarding_payload()),
+            PlannedResponse::json(StatusCode::OK, json!([template_payload("tmpl")])),
+            PlannedResponse::json(StatusCode::OK, template_payload("tmpl")),
+            PlannedResponse::json(StatusCode::OK, template_payload("tmpl")),
+            PlannedResponse::json(StatusCode::OK, template_payload("tmpl")),
+            PlannedResponse::json(StatusCode::OK, template_payload("tmpl")),
+        ];
+        let (base_url, captured, server) = spawn_test_server(responses).await;
+        let client = RestClient::new_with_base_url("admin-token", 555, base_url);
+        let body = json!({ "name": "name", "description": "desc", "tags": "tag" });
+
+        assert_eq!(client.get_application_emojis().await.unwrap().len(), 1);
+        assert_eq!(
+            client
+                .get_application_emoji(Snowflake::from("1"))
+                .await
+                .unwrap()["id"],
+            json!("1")
+        );
+        assert_eq!(
+            client.create_application_emoji(&body).await.unwrap()["id"],
+            json!("2")
+        );
+        assert_eq!(
+            client
+                .modify_application_emoji(Snowflake::from("2"), &body)
+                .await
+                .unwrap()["name"],
+            json!("renamed")
+        );
+        client
+            .delete_application_emoji(Snowflake::from("2"))
+            .await
+            .unwrap();
+        assert_eq!(
+            client
+                .get_sticker(Snowflake::from("10"))
+                .await
+                .unwrap()
+                .name,
+            "sticker"
+        );
+        assert_eq!(
+            client
+                .list_sticker_packs()
+                .await
+                .unwrap()
+                .sticker_packs
+                .len(),
+            1
+        );
+        assert_eq!(
+            client
+                .get_guild_stickers(Snowflake::from("200"))
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(
+            client
+                .get_guild_sticker(Snowflake::from("200"), Snowflake::from("11"))
+                .await
+                .unwrap()
+                .id
+                .as_str(),
+            "11"
+        );
+        assert_eq!(
+            client
+                .create_guild_sticker(
+                    Snowflake::from("200"),
+                    &body,
+                    sample_file("sticker.png", "png")
+                )
+                .await
+                .unwrap()
+                .id
+                .as_str(),
+            "12"
+        );
+        assert_eq!(
+            client
+                .modify_guild_sticker(Snowflake::from("200"), Snowflake::from("12"), &body)
+                .await
+                .unwrap()
+                .id
+                .as_str(),
+            "12"
+        );
+        client
+            .delete_guild_sticker(Snowflake::from("200"), Snowflake::from("12"))
+            .await
+            .unwrap();
+        assert_eq!(
+            client
+                .get_guild_prune_count(Snowflake::from("200"), Some(7), &[Snowflake::from("9")])
+                .await
+                .unwrap()["pruned"],
+            json!(3)
+        );
+        assert_eq!(
+            client
+                .begin_guild_prune(Snowflake::from("200"), Some(7), Some(false), &[])
+                .await
+                .unwrap()["pruned"],
+            json!(2)
+        );
+        assert!(
+            client
+                .get_guild_widget_settings(Snowflake::from("200"))
+                .await
+                .unwrap()
+                .enabled
+        );
+        assert!(
+            !client
+                .modify_guild_widget_settings(Snowflake::from("200"), &json!({ "enabled": false }))
+                .await
+                .unwrap()
+                .enabled
+        );
+        assert_eq!(
+            client
+                .get_guild_widget(Snowflake::from("200"))
+                .await
+                .unwrap()["name"],
+            json!("widget")
+        );
+        assert_eq!(
+            client
+                .follow_announcement_channel(Snowflake::from("100"), Snowflake::from("101"))
+                .await
+                .unwrap()
+                .webhook_id
+                .as_str(),
+            "101"
+        );
+        assert_eq!(
+            client
+                .create_stage_instance(&body)
+                .await
+                .unwrap()
+                .channel_id
+                .as_str(),
+            "400"
+        );
+        assert_eq!(
+            client
+                .get_stage_instance(Snowflake::from("400"))
+                .await
+                .unwrap()
+                .topic,
+            "town hall"
+        );
+        assert_eq!(
+            client
+                .modify_stage_instance(Snowflake::from("400"), &body)
+                .await
+                .unwrap()
+                .privacy_level,
+            2
+        );
+        client
+            .delete_stage_instance(Snowflake::from("400"))
+            .await
+            .unwrap();
+        assert_eq!(
+            client
+                .get_guild_welcome_screen(Snowflake::from("200"))
+                .await
+                .unwrap()
+                .welcome_channels
+                .len(),
+            1
+        );
+        assert_eq!(
+            client
+                .modify_guild_welcome_screen(Snowflake::from("200"), &welcome_screen_payload())
+                .await
+                .unwrap()
+                .description
+                .as_deref(),
+            Some("welcome")
+        );
+        assert!(
+            client
+                .get_guild_onboarding(Snowflake::from("200"))
+                .await
+                .unwrap()
+                .enabled
+        );
+        assert!(
+            client
+                .modify_guild_onboarding(Snowflake::from("200"), &onboarding_payload())
+                .await
+                .unwrap()
+                .enabled
+        );
+        assert_eq!(
+            client
+                .get_guild_templates(Snowflake::from("200"))
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(
+            client
+                .create_guild_template(Snowflake::from("200"), &body)
+                .await
+                .unwrap()
+                .code,
+            "tmpl"
+        );
+        assert_eq!(
+            client
+                .sync_guild_template(Snowflake::from("200"), "tmpl")
+                .await
+                .unwrap()
+                .code,
+            "tmpl"
+        );
+        assert_eq!(
+            client
+                .modify_guild_template(Snowflake::from("200"), "tmpl", &body)
+                .await
+                .unwrap()
+                .code,
+            "tmpl"
+        );
+        assert_eq!(
+            client
+                .delete_guild_template(Snowflake::from("200"), "tmpl")
+                .await
+                .unwrap()
+                .code,
+            "tmpl"
+        );
+
+        server.await.expect("server finished");
+        let requests = captured.lock().expect("captured requests");
+        assert_eq!(requests.len(), 31);
+        assert_request_basics(
+            &requests[0],
+            "GET",
+            "/applications/555/emojis",
+            Some("Bot admin-token"),
+        );
+        assert_request_basics(
+            &requests[4],
+            "DELETE",
+            "/applications/555/emojis/2",
+            Some("Bot admin-token"),
+        );
+        assert_request_basics(&requests[5], "GET", "/stickers/10", Some("Bot admin-token"));
+        assert_request_basics(
+            &requests[7],
+            "GET",
+            "/guilds/200/stickers",
+            Some("Bot admin-token"),
+        );
+        assert_eq!(requests[9].method, "POST");
+        assert_eq!(requests[9].path, "/guilds/200/stickers");
+        assert_eq!(requests[9].header("authorization"), Some("Bot admin-token"));
+        assert!(requests[9]
+            .header("content-type")
+            .is_some_and(|value| value.starts_with("multipart/form-data; boundary=")));
+        assert!(requests[9].body.contains(r#"name="file""#));
+        assert_request_basics(
+            &requests[12],
+            "GET",
+            "/guilds/200/prune?days=7&include_roles=9",
+            Some("Bot admin-token"),
+        );
+        assert_request_basics(
+            &requests[13],
+            "POST",
+            "/guilds/200/prune?days=7&compute_prune_count=false",
+            Some("Bot admin-token"),
+        );
+        assert_request_basics(
+            &requests[17],
+            "POST",
+            "/channels/100/followers",
+            Some("Bot admin-token"),
+        );
+        assert_request_basics(
+            &requests[18],
+            "POST",
+            "/stage-instances",
+            Some("Bot admin-token"),
+        );
+        assert_request_basics(
+            &requests[22],
+            "GET",
+            "/guilds/200/welcome-screen",
+            Some("Bot admin-token"),
+        );
+        assert_request_basics(
+            &requests[25],
+            "PUT",
+            "/guilds/200/onboarding",
+            Some("Bot admin-token"),
+        );
+        assert_request_basics(
+            &requests[28],
+            "PUT",
+            "/guilds/200/templates/tmpl",
+            Some("Bot admin-token"),
+        );
+    }
+
+    #[tokio::test]
+    async fn scheduled_event_wrappers_return_typed_models() {
+        let responses = vec![
+            PlannedResponse::json(StatusCode::OK, json!([scheduled_event_payload("1")])),
+            PlannedResponse::json(StatusCode::OK, scheduled_event_payload("2")),
+            PlannedResponse::json(StatusCode::OK, scheduled_event_payload("2")),
+            PlannedResponse::json(StatusCode::OK, scheduled_event_payload("2")),
+            PlannedResponse::empty(StatusCode::NO_CONTENT),
+            PlannedResponse::json(
+                StatusCode::OK,
+                json!([{
+                    "guild_scheduled_event_id": "2",
+                    "user": {
+                        "id": "500",
+                        "username": "attendee",
+                        "discriminator": "0000",
+                        "bot": false
+                    }
+                }]),
+            ),
+        ];
+        let (base_url, captured, server) = spawn_test_server(responses).await;
+        let client = RestClient::new_with_base_url("scheduled-token", 0, base_url);
+        let body = json!({ "name": "community night" });
+
+        assert_eq!(
+            client
+                .get_guild_scheduled_events(Snowflake::from("200"))
+                .await
+                .unwrap()[0]
+                .name,
+            "community night"
+        );
+        assert_eq!(
+            client
+                .create_guild_scheduled_event(Snowflake::from("200"), &body)
+                .await
+                .unwrap()
+                .entity_metadata
+                .unwrap()["location"],
+            json!("Stage")
+        );
+        assert_eq!(
+            client
+                .get_guild_scheduled_event(Snowflake::from("200"), Snowflake::from("2"))
+                .await
+                .unwrap()
+                .user_count,
+            Some(5)
+        );
+        assert_eq!(
+            client
+                .modify_guild_scheduled_event(Snowflake::from("200"), Snowflake::from("2"), &body)
+                .await
+                .unwrap()
+                .status,
+            1
+        );
+        client
+            .delete_guild_scheduled_event(Snowflake::from("200"), Snowflake::from("2"))
+            .await
+            .unwrap();
+        assert_eq!(
+            client
+                .get_guild_scheduled_event_users(
+                    Snowflake::from("200"),
+                    Snowflake::from("2"),
+                    Some(50)
+                )
+                .await
+                .unwrap()[0]
+                .user
+                .username,
+            "attendee"
+        );
+
+        server.await.expect("server finished");
+        let requests = captured.lock().expect("captured requests");
+        assert_eq!(requests.len(), 6);
+        assert_request_basics(
+            &requests[0],
+            "GET",
+            "/guilds/200/scheduled-events",
+            Some("Bot scheduled-token"),
+        );
+        assert_request_basics(
+            &requests[4],
+            "DELETE",
+            "/guilds/200/scheduled-events/2",
+            Some("Bot scheduled-token"),
+        );
+        assert_request_basics(
+            &requests[5],
+            "GET",
+            "/guilds/200/scheduled-events/2/users?limit=50",
+            Some("Bot scheduled-token"),
+        );
+    }
+
+    #[tokio::test]
+    async fn monetization_and_soundboard_wrappers_hit_expected_paths() {
+        let responses = vec![
+            PlannedResponse::json(StatusCode::OK, json!([sku_payload("900")])),
+            PlannedResponse::json(StatusCode::OK, json!([subscription_payload("950")])),
+            PlannedResponse::json(StatusCode::OK, subscription_payload("950")),
+            PlannedResponse::json(StatusCode::OK, json!([entitlement_payload("901")])),
+            PlannedResponse::json(StatusCode::OK, entitlement_payload("901")),
+            PlannedResponse::empty(StatusCode::NO_CONTENT),
+            PlannedResponse::json(StatusCode::OK, entitlement_payload("902")),
+            PlannedResponse::empty(StatusCode::NO_CONTENT),
+            PlannedResponse::empty(StatusCode::NO_CONTENT),
+            PlannedResponse::json(StatusCode::OK, json!([soundboard_payload("1")])),
+            PlannedResponse::json(
+                StatusCode::OK,
+                json!({ "items": [soundboard_payload("2")] }),
+            ),
+            PlannedResponse::json(StatusCode::OK, soundboard_payload("2")),
+            PlannedResponse::json(StatusCode::OK, soundboard_payload("3")),
+            PlannedResponse::json(StatusCode::OK, soundboard_payload("3")),
+            PlannedResponse::empty(StatusCode::NO_CONTENT),
+        ];
+        let (base_url, captured, server) = spawn_test_server(responses).await;
+        let client = RestClient::new_with_base_url("premium-token", 555, base_url);
+        let query = EntitlementQuery {
+            user_id: Some(Snowflake::from("777")),
+            sku_ids: vec![Snowflake::from("900"), Snowflake::from("901")],
+            limit: Some(25),
+            guild_id: Some(Snowflake::from("200")),
+            exclude_ended: Some(true),
+            exclude_deleted: Some(false),
+            ..EntitlementQuery::default()
+        };
+        let subscription_query = SubscriptionQuery {
+            user_id: Some(Snowflake::from("777")),
+            limit: Some(10),
+            ..SubscriptionQuery::default()
+        };
+        let sound_body = json!({ "sound_id": "1", "source_guild_id": "200" });
+
+        assert_eq!(client.get_skus().await.unwrap()[0].slug, "premium");
+        assert_eq!(
+            client
+                .get_sku_subscriptions(Snowflake::from("900"), &subscription_query)
+                .await
+                .unwrap()[0]
+                .id
+                .as_str(),
+            "950"
+        );
+        assert_eq!(
+            client
+                .get_sku_subscription(Snowflake::from("900"), Snowflake::from("950"))
+                .await
+                .unwrap()
+                .user_id
+                .as_str(),
+            "777"
+        );
+        assert_eq!(
+            client.get_entitlements(&query).await.unwrap()[0]
+                .sku_id
+                .as_str(),
+            "900"
+        );
+        assert_eq!(
+            client
+                .get_entitlement(Snowflake::from("901"))
+                .await
+                .unwrap()
+                .user_id
+                .unwrap()
+                .as_str(),
+            "777"
+        );
+        client
+            .consume_entitlement(Snowflake::from("901"))
+            .await
+            .unwrap();
+        assert_eq!(
+            client
+                .create_test_entitlement(&CreateTestEntitlement {
+                    sku_id: Snowflake::from("900"),
+                    owner_id: Snowflake::from("200"),
+                    owner_type: 1,
+                })
+                .await
+                .unwrap()
+                .id
+                .as_str(),
+            "902"
+        );
+        client
+            .delete_test_entitlement(Snowflake::from("902"))
+            .await
+            .unwrap();
+        client
+            .send_soundboard_sound(Snowflake::from("300"), &sound_body)
+            .await
+            .unwrap();
+        assert_eq!(
+            client.list_default_soundboard_sounds().await.unwrap().len(),
+            1
+        );
+        assert_eq!(
+            client
+                .list_guild_soundboard_sounds(Snowflake::from("200"))
+                .await
+                .unwrap()
+                .items
+                .len(),
+            1
+        );
+        assert_eq!(
+            client
+                .get_guild_soundboard_sound(Snowflake::from("200"), Snowflake::from("2"))
+                .await
+                .unwrap()
+                .name,
+            "quack"
+        );
+        assert_eq!(
+            client
+                .create_guild_soundboard_sound(Snowflake::from("200"), &sound_body)
+                .await
+                .unwrap()
+                .sound_id
+                .as_str(),
+            "3"
+        );
+        assert_eq!(
+            client
+                .modify_guild_soundboard_sound(
+                    Snowflake::from("200"),
+                    Snowflake::from("3"),
+                    &json!({ "name": "quack" })
+                )
+                .await
+                .unwrap()
+                .sound_id
+                .as_str(),
+            "3"
+        );
+        client
+            .delete_guild_soundboard_sound(Snowflake::from("200"), Snowflake::from("3"))
+            .await
+            .unwrap();
+
+        server.await.expect("server finished");
+        let requests = captured.lock().expect("captured requests");
+        assert_eq!(requests.len(), 15);
+        assert_request_basics(
+            &requests[0],
+            "GET",
+            "/applications/555/skus",
+            Some("Bot premium-token"),
+        );
+        assert_request_basics(
+            &requests[1],
+            "GET",
+            "/skus/900/subscriptions?limit=10&user_id=777",
+            Some("Bot premium-token"),
+        );
+        assert_request_basics(
+            &requests[2],
+            "GET",
+            "/skus/900/subscriptions/950",
+            Some("Bot premium-token"),
+        );
+        assert_request_basics(
+            &requests[3],
+            "GET",
+            "/applications/555/entitlements?user_id=777&sku_ids=900,901&limit=25&guild_id=200&exclude_ended=true&exclude_deleted=false",
+            Some("Bot premium-token"),
+        );
+        assert_request_basics(
+            &requests[5],
+            "POST",
+            "/applications/555/entitlements/901/consume",
+            Some("Bot premium-token"),
+        );
+        assert_request_basics(
+            &requests[8],
+            "POST",
+            "/channels/300/send-soundboard-sound",
+            Some("Bot premium-token"),
+        );
+        assert_request_basics(
+            &requests[9],
+            "GET",
+            "/soundboard-default-sounds",
+            Some("Bot premium-token"),
+        );
+        assert_request_basics(
+            &requests[14],
+            "DELETE",
+            "/guilds/200/soundboard-sounds/3",
+            Some("Bot premium-token"),
+        );
+    }
+
+    #[tokio::test]
+    async fn poll_thread_invite_and_integration_wrappers_hit_expected_paths() {
+        let thread_list = json!({
+            "threads": [{ "id": "700", "type": 11, "name": "thread" }],
+            "members": [{ "id": "700", "user_id": "777", "flags": 0 }],
+            "has_more": false
+        });
+        let responses = vec![
+            PlannedResponse::empty(StatusCode::NO_CONTENT),
+            PlannedResponse::empty(StatusCode::NO_CONTENT),
+            PlannedResponse::json(
+                StatusCode::OK,
+                json!({ "id": "700", "user_id": "777", "flags": 0 }),
+            ),
+            PlannedResponse::json(
+                StatusCode::OK,
+                json!([{ "id": "700", "user_id": "777", "flags": 0 }]),
+            ),
+            PlannedResponse::json(StatusCode::OK, thread_list.clone()),
+            PlannedResponse::json(StatusCode::OK, thread_list.clone()),
+            PlannedResponse::json(StatusCode::OK, thread_list.clone()),
+            PlannedResponse::json(StatusCode::OK, thread_list),
+            PlannedResponse::json(StatusCode::OK, json!({ "code": "abc", "uses": 2 })),
+            PlannedResponse::json(
+                StatusCode::OK,
+                json!([{
+                    "id": "900",
+                    "name": "integration",
+                    "type": "discord",
+                    "enabled": true,
+                    "account": { "id": "acc", "name": "account" }
+                }]),
+            ),
+            PlannedResponse::empty(StatusCode::NO_CONTENT),
+            PlannedResponse::json(
+                StatusCode::OK,
+                json!({ "users": [{ "id": "777", "username": "voter" }] }),
+            ),
+            PlannedResponse::json(
+                StatusCode::OK,
+                json!({ "id": "800", "channel_id": "100", "content": "poll ended" }),
+            ),
+        ];
+        let (base_url, captured, server) = spawn_test_server(responses).await;
+        let client = RestClient::new_with_base_url("coverage-token", 555, base_url);
+
+        client
+            .add_thread_member(Snowflake::from("700"), Snowflake::from("777"))
+            .await
+            .unwrap();
+        client
+            .remove_thread_member(Snowflake::from("700"), Snowflake::from("777"))
+            .await
+            .unwrap();
+        assert_eq!(
+            client
+                .get_thread_member(Snowflake::from("700"), Snowflake::from("777"), Some(true))
+                .await
+                .unwrap()
+                .user_id
+                .unwrap()
+                .as_str(),
+            "777"
+        );
+        assert_eq!(
+            client
+                .list_thread_members(
+                    Snowflake::from("700"),
+                    &ThreadMemberQuery {
+                        with_member: Some(true),
+                        after: Some(Snowflake::from("10")),
+                        limit: Some(25),
+                    },
+                )
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(
+            client
+                .list_public_archived_threads(
+                    Snowflake::from("100"),
+                    &ArchivedThreadsQuery {
+                        before: Some("2026-04-29T00:00:00Z".to_string()),
+                        limit: Some(50),
+                    },
+                )
+                .await
+                .unwrap()
+                .threads
+                .len(),
+            1
+        );
+        client
+            .list_private_archived_threads(Snowflake::from("100"), &ArchivedThreadsQuery::default())
+            .await
+            .unwrap();
+        client
+            .list_joined_private_archived_threads(
+                Snowflake::from("100"),
+                &JoinedArchivedThreadsQuery {
+                    before: Some(Snowflake::from("700")),
+                    limit: Some(10),
+                },
+            )
+            .await
+            .unwrap();
+        client
+            .get_active_guild_threads(Snowflake::from("200"))
+            .await
+            .unwrap();
+        assert_eq!(
+            client
+                .get_invite_with_options(
+                    "abc",
+                    Some(true),
+                    Some(true),
+                    Some(Snowflake::from("300"))
+                )
+                .await
+                .unwrap()
+                .uses,
+            Some(2)
+        );
+        assert_eq!(
+            client
+                .get_guild_integrations(Snowflake::from("200"))
+                .await
+                .unwrap()[0]
+                .id
+                .as_str(),
+            "900"
+        );
+        client
+            .delete_guild_integration(Snowflake::from("200"), Snowflake::from("900"))
+            .await
+            .unwrap();
+        assert_eq!(
+            client
+                .get_poll_answer_voters(
+                    Snowflake::from("100"),
+                    Snowflake::from("800"),
+                    1,
+                    Some(Snowflake::from("777")),
+                    Some(10),
+                )
+                .await
+                .unwrap()
+                .users[0]
+                .username,
+            "voter"
+        );
+        assert_eq!(
+            client
+                .end_poll(Snowflake::from("100"), Snowflake::from("800"))
+                .await
+                .unwrap()
+                .content,
+            "poll ended"
+        );
+
+        server.await.expect("server finished");
+        let requests = captured.lock().expect("captured requests");
+        assert_eq!(requests.len(), 13);
+        assert_request_basics(
+            &requests[0],
+            "PUT",
+            "/channels/700/thread-members/777",
+            Some("Bot coverage-token"),
+        );
+        assert_request_basics(
+            &requests[3],
+            "GET",
+            "/channels/700/thread-members?with_member=true&after=10&limit=25",
+            Some("Bot coverage-token"),
+        );
+        assert_request_basics(
+            &requests[4],
+            "GET",
+            "/channels/100/threads/archived/public?before=2026-04-29T00:00:00Z&limit=50",
+            Some("Bot coverage-token"),
+        );
+        assert_request_basics(
+            &requests[6],
+            "GET",
+            "/channels/100/users/@me/threads/archived/private?before=700&limit=10",
+            Some("Bot coverage-token"),
+        );
+        assert_request_basics(
+            &requests[7],
+            "GET",
+            "/guilds/200/threads/active",
+            Some("Bot coverage-token"),
+        );
+        assert_request_basics(
+            &requests[8],
+            "GET",
+            "/invites/abc?with_counts=true&with_expiration=true&guild_scheduled_event_id=300",
+            Some("Bot coverage-token"),
+        );
+        assert_request_basics(
+            &requests[10],
+            "DELETE",
+            "/guilds/200/integrations/900",
+            Some("Bot coverage-token"),
+        );
+        assert_request_basics(
+            &requests[11],
+            "GET",
+            "/channels/100/polls/800/answers/1?after=777&limit=10",
+            Some("Bot coverage-token"),
+        );
+        assert_request_basics(
+            &requests[12],
+            "POST",
+            "/channels/100/polls/800/expire",
+            Some("Bot coverage-token"),
+        );
     }
 
     #[tokio::test]

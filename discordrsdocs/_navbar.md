@@ -1,4 +1,4 @@
-* [GitHub](https://github.com/Ingwannu/discordrs)
+* [GitHub](https://github.com/Ingwannu/discord.rs)
 * [Getting Started](#/docs/guide/getting-started)
 * [Architecture](#/docs/guide/architecture)
 * [Commands](#/docs/api/commands)

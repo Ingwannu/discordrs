@@ -1,4 +1,4 @@
-//! discordrs - Standalone Discord bot framework with Components V2, Gateway, and HTTP client
+//! discord.rs - Standalone Discord bot framework with Components V2, Gateway, and HTTP client
 //!
 //! # Features
 //! - `gateway` - Gateway WebSocket client, BotClient, EventHandler
@@ -39,6 +39,7 @@ pub mod interactions;
 
 pub use cache::{
     CacheHandle, ChannelManager, GuildManager, MemberManager, MessageManager, RoleManager,
+    UserManager,
 };
 pub use collection::Collection;
 pub use command::{
@@ -47,19 +48,31 @@ pub use command::{
 };
 pub use error::{DiscordError, HttpError};
 pub use event::{
-    decode_event, ChannelEvent, Event, GuildDeleteEvent, GuildDeletePayload, GuildEvent,
-    InteractionEvent, MemberEvent, MemberRemoveEvent, MemberRemovePayload, MessageDeleteEvent,
-    MessageDeletePayload, MessageEvent, ReadyEvent, ReadyPayload, RoleDeleteEvent,
-    RoleDeletePayload, RoleEvent, VoiceServerEvent, VoiceStateEvent,
+    decode_event, AuditLogEntryEvent, AutoModerationEvent, ChannelEvent, EntitlementEvent, Event,
+    GuildDeleteEvent, GuildDeletePayload, GuildEvent, GuildStickersUpdateEvent, InteractionEvent,
+    MemberEvent, MemberRemoveEvent, MemberRemovePayload, MessageDeleteEvent, MessageDeletePayload,
+    MessageEvent, ReactionRemoveEmojiEvent, ReadyEvent, ReadyPayload, RoleDeleteEvent,
+    RoleDeletePayload, RoleEvent, ScheduledEvent, SoundboardSoundDeleteEvent, SoundboardSoundEvent,
+    SoundboardSoundsEvent, ThreadEvent, ThreadListSyncEvent, ThreadMemberUpdateEvent,
+    ThreadMembersUpdateEvent, UserUpdateEvent, VoiceServerEvent, VoiceStateEvent,
 };
 pub use manager::CachedManager;
 pub use model::{
-    ApplicationCommand, ApplicationCommandOption, ApplicationCommandOptionChoice, Attachment,
-    AutocompleteInteraction, Channel, ChatInputCommandInteraction, CommandInteractionData,
-    CommandInteractionOption, ComponentInteraction, CreateDmChannel, CreateMessage, DiscordModel,
-    GatewayBot, Guild, Interaction, InteractionCallbackResponse, InteractionContextData, Member,
-    Message, MessageContextMenuInteraction, ModalSubmitInteraction, PermissionsBitField, Role,
-    SessionStartLimit, Snowflake, User, UserContextMenuInteraction, VoiceServerUpdate, VoiceState,
+    ApplicationCommand, ApplicationCommandOption, ApplicationCommandOptionChoice,
+    ArchivedThreadsQuery, Attachment, AuditLogEntry, AutocompleteInteraction, Ban, Channel,
+    ChannelMention, ChatInputCommandInteraction, CommandInteractionData, CommandInteractionOption,
+    ComponentInteraction, CreateDmChannel, CreateMessage, CreatePoll, CreateTestEntitlement,
+    DefaultReaction, DiscordModel, Embed, Entitlement, EntitlementQuery, FollowedChannel, ForumTag,
+    GatewayBot, Guild, GuildOnboarding, GuildScheduledEvent, GuildScheduledEventUser,
+    GuildTemplate, GuildWidgetSettings, Integration, IntegrationAccount, IntegrationApplication,
+    Interaction, InteractionCallbackResponse, InteractionContextData, Invite,
+    JoinedArchivedThreadsQuery, Member, Message, MessageContextMenuInteraction, MessageReference,
+    ModalSubmitInteraction, PermissionOverwrite, PermissionsBitField, Poll, PollAnswer,
+    PollAnswerCount, PollAnswerVoters, PollMedia, PollResults, Role, RoleTags, Sku, Snowflake,
+    SoundboardSound, SoundboardSoundList, StageInstance, Sticker, StickerItem, StickerPack,
+    StickerPackList, Subscription, SubscriptionQuery, ThreadListResponse, ThreadMember,
+    ThreadMemberQuery, User, UserContextMenuInteraction, VoiceServerUpdate, VoiceState, Webhook,
+    WelcomeScreen, WelcomeScreenChannel,
 };
 pub use response::{InteractionResponseBuilder, MessageBuilder};
 #[cfg(feature = "sharding")]
@@ -83,10 +96,14 @@ pub use voice::{
     VoiceSpeakingFlags, VoiceSpeakingState, VoiceTransportProtocol, VoiceTransportState,
     VoiceUdpDiscoveryPacket,
 };
+#[cfg(all(feature = "voice", feature = "dave"))]
+pub use voice_runtime::VoiceDaveyDecryptor;
 #[cfg(feature = "voice")]
 pub use voice_runtime::{
-    connect as connect_voice_runtime, VoiceRuntimeConfig, VoiceRuntimeHandle, VoiceRuntimeState,
-    VoiceSessionDescription,
+    connect as connect_voice_runtime, VoiceDaveFrame, VoiceDaveFrameDecryptor, VoiceDaveState,
+    VoiceDaveUnencryptedRange, VoiceDecodedPacket, VoiceOpusDecoder, VoiceRawUdpPacket,
+    VoiceReceivedPacket, VoiceRtpHeader, VoiceRuntimeConfig, VoiceRuntimeHandle, VoiceRuntimeState,
+    VoiceSessionDescription, VoiceSpeakingUpdate,
 };
 #[cfg(any(feature = "gateway", feature = "sharding"))]
 pub use ws::{GatewayCompression, GatewayConnectionConfig, GatewayEncoding};

@@ -1,8 +1,10 @@
-# discordrs Documentation
+# discord.rs Documentation
 
-A practical docs site for building typed Discord bots with `discordrs`.
+A practical docs site for building typed Discord bots with the `discordrs` crate.
 
-> `discordrs` now centers on `Client`, `RestClient`, typed models/events/interactions, command builders, Components V2 helpers, and optional cache/collector layers.
+> discord.rs now centers on `Client`, `RestClient`, typed models/events/interactions, command builders, Components V2 helpers, and optional cache/collector layers.
+
+Brand name: discord.rs. The crates.io package name and Rust import path remain `discordrs`.
 
 ## Start Here
 
@@ -20,26 +22,32 @@ A practical docs site for building typed Discord bots with `discordrs`.
 - `SlashCommandBuilder` / `UserCommandBuilder` / `MessageCommandBuilder`
 - `CacheHandle` plus manager types, with in-memory cache storage enabled by the `cache` feature
 - collector types behind the `collectors` feature
+- `connect_voice_runtime(...)`, `VoiceOpusDecoder`, and experimental DAVE hooks behind `voice` / `dave`
+- typed REST/event coverage for polls, subscriptions, entitlements, soundboard, thread details, forum fields, invites, and integrations
 
 ## Feature Flags
 
 ```toml
 [dependencies]
 # core only
-discordrs = "1.0.0"
+discordrs = "1.1.0"
 
 # typed gateway runtime
-discordrs = { version = "1.0.0", features = ["gateway"] }
+discordrs = { version = "1.1.0", features = ["gateway"] }
 
 # typed gateway runtime with cache storage or collectors
-discordrs = { version = "1.0.0", features = ["gateway", "cache"] }
-discordrs = { version = "1.0.0", features = ["gateway", "collectors"] }
+discordrs = { version = "1.1.0", features = ["gateway", "cache"] }
+discordrs = { version = "1.1.0", features = ["gateway", "collectors"] }
 
 # interactions endpoint
-discordrs = { version = "1.0.0", features = ["interactions"] }
+discordrs = { version = "1.1.0", features = ["interactions"] }
+
+# voice receive, Opus decode, and experimental DAVE hook
+discordrs = { version = "1.1.0", features = ["voice"] }
+discordrs = { version = "1.1.0", features = ["voice", "dave"] }
 ```
 
-## Roadmap Placeholders
+## Runtime Extensions
 
 - [Sharding](#/docs/api/sharding)
 - [Voice](#/docs/api/voice)

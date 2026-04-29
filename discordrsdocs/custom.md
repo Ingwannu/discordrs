@@ -1,8 +1,8 @@
-# discordrs Library Documentation
+# discord.rs Library Documentation
 
 ## Overview
 
-discordrs is a standalone Rust framework for building Discord bots. It provides:
+discord.rs is a standalone Rust framework for building Discord bots. It provides:
 
 - **Gateway WebSocket runtime** for connecting, heartbeating, identifying, resuming, and dispatching events.
 - **HTTP REST client** with automatic rate-limit retry for sending messages, managing commands, and responding to interactions.

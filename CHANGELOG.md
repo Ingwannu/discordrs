@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.1.0
+
+- Added Discord Gateway `zlib-stream` handling that keeps compressed payload state across binary frames and inflates only complete payload boundaries.
+- Added multipart file upload support through `reqwest`'s multipart feature, including typed message, webhook, and interaction attachment helpers.
+- Added typed webhook message CRUD helpers for token-authenticated webhook message fetch, edit, and delete flows.
+- Added typed Poll models and REST/event coverage for poll payloads, vote events, and poll ending.
+- Expanded Auto Moderation, Scheduled Event, Audit Log, Sticker, Stage Instance, Welcome Screen, Guild Onboarding, Guild Template, Invite, Integration, Forum, Soundboard, Subscription, SKU, and Entitlement models and REST/event coverage.
+- Expanded cache coverage for emoji, stickers, voice states, presences, threads, webhooks, scheduled events, AutoMod rules, invites, integrations, soundboard sounds, and monetization entities with cache policy toggles.
+- Added voice receive support for raw UDP packets, RTP parsing, AES-GCM and XChaCha RTP-size transport decrypt, and pure-Rust Opus PCM decoding.
+- Added experimental `dave` feature support for DAVE/MLS frame parsing, state tracking, and a `davey`/OpenMLS-backed decryptor hook. Live Discord DAVE interoperability still requires real voice gateway transition testing.
+- Changed the HTTP User-Agent version to use `env!("CARGO_PKG_VERSION")` so future package versions no longer need a hard-coded request-header update.
+- Updated README, USAGE, Docsify docs, and the `discordrs-dev` Codex skill guidance for the `1.1.0` public surface.
+
 ## 1.0.0
 
 - **BREAKING**: Removed the legacy raw `RestClient` convenience methods (`send_message`, `edit_message`, `create_dm_channel`, `create_interaction_response`, and `bulk_overwrite_global_commands`) from the public API. The typed `RestClient` surface is now the supported path, and internal JSON helpers remain crate-private.

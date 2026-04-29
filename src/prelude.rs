@@ -26,9 +26,12 @@ pub use crate::helpers::{
 };
 pub use crate::http::RestClient;
 pub use crate::model::{
-    ApplicationCommandOptionChoice, CommandInteractionData, CommandInteractionOption,
-    CreateMessage, GatewayBot, Interaction, InteractionCallbackResponse, InteractionContextData,
-    Message, PermissionsBitField, SessionStartLimit, Snowflake, VoiceServerUpdate, VoiceState,
+    ApplicationCommandOptionChoice, ArchivedThreadsQuery, CommandInteractionData,
+    CommandInteractionOption, CreateMessage, CreateTestEntitlement, Entitlement, EntitlementQuery,
+    GatewayBot, Integration, Interaction, InteractionCallbackResponse, InteractionContextData,
+    JoinedArchivedThreadsQuery, Message, PermissionsBitField, PollAnswerVoters, SessionStartLimit,
+    Sku, Snowflake, SoundboardSound, SoundboardSoundList, Subscription, SubscriptionQuery,
+    ThreadListResponse, ThreadMember, ThreadMemberQuery, VoiceServerUpdate, VoiceState,
 };
 pub use crate::response::{InteractionResponseBuilder, MessageBuilder};
 #[cfg(feature = "voice")]
@@ -36,9 +39,13 @@ pub use crate::voice::{
     AudioTrack, VoiceConnectionConfig, VoiceEncryptionMode, VoiceGatewayCommand, VoiceManager,
     VoiceSpeakingFlags, VoiceTransportState, VoiceUdpDiscoveryPacket,
 };
+#[cfg(all(feature = "voice", feature = "dave"))]
+pub use crate::voice_runtime::VoiceDaveyDecryptor;
 #[cfg(feature = "voice")]
 pub use crate::voice_runtime::{
-    connect as connect_voice_runtime, VoiceRuntimeConfig, VoiceRuntimeHandle,
+    connect as connect_voice_runtime, VoiceDaveFrame, VoiceDaveFrameDecryptor, VoiceDecodedPacket,
+    VoiceOpusDecoder, VoiceRawUdpPacket, VoiceReceivedPacket, VoiceRuntimeConfig,
+    VoiceRuntimeHandle,
 };
 
 #[cfg(test)]

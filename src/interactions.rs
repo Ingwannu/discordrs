@@ -816,10 +816,7 @@ mod tests {
             Bytes::from(bad_json_body),
         )
         .await;
-        assert_eq!(
-            json_response(bad_json).await["error"].as_str().is_some(),
-            true
-        );
+        assert!(json_response(bad_json).await["error"].as_str().is_some());
 
         let bad_type_body = serde_json::to_vec(&json!({
             "id": "1",

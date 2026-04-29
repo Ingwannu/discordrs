@@ -3,8 +3,8 @@ use serde_json::Value;
 
 use crate::error::DiscordError;
 use crate::model::{
-    Channel, Guild, Interaction, Member, Message, Role, Snowflake, User, VoiceServerUpdate,
-    VoiceState,
+    AuditLogEntry, Channel, Entitlement, Guild, Integration, Interaction, Member, Message, Role,
+    Snowflake, SoundboardSound, Subscription, User, VoiceServerUpdate, VoiceState,
 };
 use crate::parsers::parse_interaction;
 use crate::types::Emoji;
@@ -162,6 +162,63 @@ pub struct GuildEmojisUpdateEvent {
 }
 
 #[derive(Clone, Debug)]
+pub struct EntitlementEvent {
+    pub entitlement: Entitlement,
+    pub raw: Value,
+}
+
+#[derive(Clone, Debug)]
+pub struct SubscriptionEvent {
+    pub subscription: Subscription,
+    pub raw: Value,
+}
+
+#[derive(Clone, Debug)]
+pub struct IntegrationEvent {
+    pub integration: Integration,
+    pub guild_id: Option<Snowflake>,
+    pub raw: Value,
+}
+
+#[derive(Clone, Debug)]
+pub struct IntegrationDeleteEvent {
+    pub id: Option<Snowflake>,
+    pub guild_id: Option<Snowflake>,
+    pub application_id: Option<Snowflake>,
+    pub raw: Value,
+}
+
+#[derive(Clone, Debug)]
+pub struct PollVoteEvent {
+    pub user_id: Option<Snowflake>,
+    pub channel_id: Option<Snowflake>,
+    pub message_id: Option<Snowflake>,
+    pub guild_id: Option<Snowflake>,
+    pub answer_id: Option<u64>,
+    pub raw: Value,
+}
+
+#[derive(Clone, Debug)]
+pub struct SoundboardSoundEvent {
+    pub sound: SoundboardSound,
+    pub raw: Value,
+}
+
+#[derive(Clone, Debug)]
+pub struct SoundboardSoundDeleteEvent {
+    pub sound_id: Snowflake,
+    pub guild_id: Snowflake,
+    pub raw: Value,
+}
+
+#[derive(Clone, Debug)]
+pub struct SoundboardSoundsEvent {
+    pub guild_id: Snowflake,
+    pub soundboard_sounds: Vec<SoundboardSound>,
+    pub raw: Value,
+}
+
+#[derive(Clone, Debug)]
 pub struct InviteEvent {
     pub guild_id: Option<Snowflake>,
     pub channel_id: Option<Snowflake>,
@@ -205,6 +262,12 @@ pub struct PresenceUpdateEvent {
 }
 
 #[derive(Clone, Debug)]
+pub struct UserUpdateEvent {
+    pub user: User,
+    pub raw: Value,
+}
+
+#[derive(Clone, Debug)]
 pub struct WebhooksUpdateEvent {
     pub guild_id: Option<Snowflake>,
     pub channel_id: Option<Snowflake>,
@@ -214,6 +277,112 @@ pub struct WebhooksUpdateEvent {
 #[derive(Clone, Debug)]
 pub struct GuildIntegrationsUpdateEvent {
     pub guild_id: Option<Snowflake>,
+    pub raw: Value,
+}
+
+#[derive(Clone, Debug)]
+pub struct ThreadEvent {
+    pub thread: Channel,
+    pub raw: Value,
+}
+
+#[derive(Clone, Debug)]
+pub struct ThreadMemberUpdateEvent {
+    pub guild_id: Option<Snowflake>,
+    pub thread_id: Option<Snowflake>,
+    pub raw: Value,
+}
+
+#[derive(Clone, Debug)]
+pub struct ThreadMembersUpdateEvent {
+    pub guild_id: Option<Snowflake>,
+    pub thread_id: Option<Snowflake>,
+    pub added_members: Option<Vec<serde_json::Value>>,
+    pub removed_member_ids: Option<Vec<Snowflake>>,
+    pub member_count: Option<u64>,
+    pub raw: Value,
+}
+
+#[derive(Clone, Debug)]
+pub struct ThreadListSyncEvent {
+    pub guild_id: Option<Snowflake>,
+    pub threads: Vec<Channel>,
+    pub raw: Value,
+}
+
+#[derive(Clone, Debug)]
+pub struct ReactionRemoveEmojiEvent {
+    pub channel_id: Option<Snowflake>,
+    pub message_id: Option<Snowflake>,
+    pub guild_id: Option<Snowflake>,
+    pub emoji: Option<Emoji>,
+    pub raw: Value,
+}
+
+#[derive(Clone, Debug)]
+pub struct GuildStickersUpdateEvent {
+    pub guild_id: Option<Snowflake>,
+    pub stickers: Vec<serde_json::Value>,
+    pub raw: Value,
+}
+
+#[derive(Clone, Debug)]
+pub struct ScheduledEvent {
+    pub id: Option<Snowflake>,
+    pub guild_id: Option<Snowflake>,
+    pub channel_id: Option<Snowflake>,
+    pub creator_id: Option<Snowflake>,
+    pub name: Option<String>,
+    pub description: Option<String>,
+    pub scheduled_start_time: Option<String>,
+    pub scheduled_end_time: Option<String>,
+    pub privacy_level: Option<u64>,
+    pub status: Option<u64>,
+    pub entity_type: Option<u64>,
+    pub entity_id: Option<Snowflake>,
+    pub entity_metadata: Option<Value>,
+    pub user_count: Option<u64>,
+    pub image: Option<String>,
+    pub raw: Value,
+}
+
+#[derive(Clone, Debug)]
+pub struct AutoModerationEvent {
+    pub id: Option<Snowflake>,
+    pub guild_id: Option<Snowflake>,
+    pub name: Option<String>,
+    pub creator_id: Option<Snowflake>,
+    pub event_type: Option<u64>,
+    pub trigger_type: Option<u64>,
+    pub trigger_metadata: Option<Value>,
+    pub actions: Vec<Value>,
+    pub enabled: Option<bool>,
+    pub exempt_roles: Vec<Snowflake>,
+    pub exempt_channels: Vec<Snowflake>,
+    pub action: Option<Value>,
+    pub rule_id: Option<Snowflake>,
+    pub rule_trigger_type: Option<u64>,
+    pub user_id: Option<Snowflake>,
+    pub channel_id: Option<Snowflake>,
+    pub message_id: Option<Snowflake>,
+    pub alert_system_message_id: Option<Snowflake>,
+    pub content: Option<String>,
+    pub matched_keyword: Option<String>,
+    pub matched_content: Option<String>,
+    pub raw: Value,
+}
+
+#[derive(Clone, Debug)]
+pub struct AuditLogEntryEvent {
+    pub guild_id: Option<Snowflake>,
+    pub entry: Option<AuditLogEntry>,
+    pub id: Option<Snowflake>,
+    pub user_id: Option<Snowflake>,
+    pub target_id: Option<Snowflake>,
+    pub action_type: Option<u64>,
+    pub changes: Option<Vec<Value>>,
+    pub options: Option<Value>,
+    pub reason: Option<String>,
     pub raw: Value,
 }
 
@@ -241,6 +410,20 @@ pub enum Event {
     GuildBanRemove(GuildBanEvent),
     GuildEmojisUpdate(GuildEmojisUpdateEvent),
     GuildIntegrationsUpdate(GuildIntegrationsUpdateEvent),
+    EntitlementCreate(EntitlementEvent),
+    EntitlementUpdate(EntitlementEvent),
+    EntitlementDelete(EntitlementEvent),
+    SubscriptionCreate(SubscriptionEvent),
+    SubscriptionUpdate(SubscriptionEvent),
+    SubscriptionDelete(SubscriptionEvent),
+    IntegrationCreate(IntegrationEvent),
+    IntegrationUpdate(IntegrationEvent),
+    IntegrationDelete(IntegrationDeleteEvent),
+    GuildSoundboardSoundCreate(SoundboardSoundEvent),
+    GuildSoundboardSoundUpdate(SoundboardSoundEvent),
+    GuildSoundboardSoundDelete(SoundboardSoundDeleteEvent),
+    GuildSoundboardSoundsUpdate(SoundboardSoundsEvent),
+    SoundboardSounds(SoundboardSoundsEvent),
     WebhooksUpdate(WebhooksUpdateEvent),
     InviteCreate(InviteEvent),
     InviteDelete(InviteEvent),
@@ -249,9 +432,28 @@ pub enum Event {
     MessageReactionRemoveAll(ReactionRemoveAllEvent),
     TypingStart(TypingStartEvent),
     PresenceUpdate(PresenceUpdateEvent),
+    UserUpdate(UserUpdateEvent),
     InteractionCreate(InteractionEvent),
     VoiceStateUpdate(VoiceStateEvent),
     VoiceServerUpdate(VoiceServerEvent),
+    ThreadCreate(ThreadEvent),
+    ThreadUpdate(ThreadEvent),
+    ThreadDelete(ThreadEvent),
+    ThreadListSync(ThreadListSyncEvent),
+    ThreadMemberUpdate(ThreadMemberUpdateEvent),
+    ThreadMembersUpdate(ThreadMembersUpdateEvent),
+    MessageReactionRemoveEmoji(ReactionRemoveEmojiEvent),
+    MessagePollVoteAdd(PollVoteEvent),
+    MessagePollVoteRemove(PollVoteEvent),
+    GuildStickersUpdate(GuildStickersUpdateEvent),
+    GuildScheduledEventCreate(ScheduledEvent),
+    GuildScheduledEventUpdate(ScheduledEvent),
+    GuildScheduledEventDelete(ScheduledEvent),
+    AutoModerationRuleCreate(AutoModerationEvent),
+    AutoModerationRuleUpdate(AutoModerationEvent),
+    AutoModerationRuleDelete(AutoModerationEvent),
+    AutoModerationActionExecution(AutoModerationEvent),
+    GuildAuditLogEntryCreate(AuditLogEntryEvent),
     Unknown { kind: String, raw: Value },
 }
 
@@ -280,6 +482,20 @@ impl Event {
             Event::GuildBanRemove(_) => "GUILD_BAN_REMOVE",
             Event::GuildEmojisUpdate(_) => "GUILD_EMOJIS_UPDATE",
             Event::GuildIntegrationsUpdate(_) => "GUILD_INTEGRATIONS_UPDATE",
+            Event::EntitlementCreate(_) => "ENTITLEMENT_CREATE",
+            Event::EntitlementUpdate(_) => "ENTITLEMENT_UPDATE",
+            Event::EntitlementDelete(_) => "ENTITLEMENT_DELETE",
+            Event::SubscriptionCreate(_) => "SUBSCRIPTION_CREATE",
+            Event::SubscriptionUpdate(_) => "SUBSCRIPTION_UPDATE",
+            Event::SubscriptionDelete(_) => "SUBSCRIPTION_DELETE",
+            Event::IntegrationCreate(_) => "INTEGRATION_CREATE",
+            Event::IntegrationUpdate(_) => "INTEGRATION_UPDATE",
+            Event::IntegrationDelete(_) => "INTEGRATION_DELETE",
+            Event::GuildSoundboardSoundCreate(_) => "GUILD_SOUNDBOARD_SOUND_CREATE",
+            Event::GuildSoundboardSoundUpdate(_) => "GUILD_SOUNDBOARD_SOUND_UPDATE",
+            Event::GuildSoundboardSoundDelete(_) => "GUILD_SOUNDBOARD_SOUND_DELETE",
+            Event::GuildSoundboardSoundsUpdate(_) => "GUILD_SOUNDBOARD_SOUNDS_UPDATE",
+            Event::SoundboardSounds(_) => "SOUNDBOARD_SOUNDS",
             Event::WebhooksUpdate(_) => "WEBHOOKS_UPDATE",
             Event::InviteCreate(_) => "INVITE_CREATE",
             Event::InviteDelete(_) => "INVITE_DELETE",
@@ -288,9 +504,28 @@ impl Event {
             Event::MessageReactionRemoveAll(_) => "MESSAGE_REACTION_REMOVE_ALL",
             Event::TypingStart(_) => "TYPING_START",
             Event::PresenceUpdate(_) => "PRESENCE_UPDATE",
+            Event::UserUpdate(_) => "USER_UPDATE",
             Event::InteractionCreate(_) => "INTERACTION_CREATE",
             Event::VoiceStateUpdate(_) => "VOICE_STATE_UPDATE",
             Event::VoiceServerUpdate(_) => "VOICE_SERVER_UPDATE",
+            Event::ThreadCreate(_) => "THREAD_CREATE",
+            Event::ThreadUpdate(_) => "THREAD_UPDATE",
+            Event::ThreadDelete(_) => "THREAD_DELETE",
+            Event::ThreadListSync(_) => "THREAD_LIST_SYNC",
+            Event::ThreadMemberUpdate(_) => "THREAD_MEMBER_UPDATE",
+            Event::ThreadMembersUpdate(_) => "THREAD_MEMBERS_UPDATE",
+            Event::MessageReactionRemoveEmoji(_) => "MESSAGE_REACTION_REMOVE_EMOJI",
+            Event::MessagePollVoteAdd(_) => "MESSAGE_POLL_VOTE_ADD",
+            Event::MessagePollVoteRemove(_) => "MESSAGE_POLL_VOTE_REMOVE",
+            Event::GuildStickersUpdate(_) => "GUILD_STICKERS_UPDATE",
+            Event::GuildScheduledEventCreate(_) => "GUILD_SCHEDULED_EVENT_CREATE",
+            Event::GuildScheduledEventUpdate(_) => "GUILD_SCHEDULED_EVENT_UPDATE",
+            Event::GuildScheduledEventDelete(_) => "GUILD_SCHEDULED_EVENT_DELETE",
+            Event::AutoModerationRuleCreate(_) => "AUTO_MODERATION_RULE_CREATE",
+            Event::AutoModerationRuleUpdate(_) => "AUTO_MODERATION_RULE_UPDATE",
+            Event::AutoModerationRuleDelete(_) => "AUTO_MODERATION_RULE_DELETE",
+            Event::AutoModerationActionExecution(_) => "AUTO_MODERATION_ACTION_EXECUTION",
+            Event::GuildAuditLogEntryCreate(_) => "GUILD_AUDIT_LOG_ENTRY_CREATE",
             Event::Unknown { kind, .. } => kind.as_str(),
         }
     }
@@ -314,15 +549,48 @@ impl Event {
             Event::GuildBanAdd(event) | Event::GuildBanRemove(event) => &event.raw,
             Event::GuildEmojisUpdate(event) => &event.raw,
             Event::GuildIntegrationsUpdate(event) => &event.raw,
+            Event::EntitlementCreate(event)
+            | Event::EntitlementUpdate(event)
+            | Event::EntitlementDelete(event) => &event.raw,
+            Event::SubscriptionCreate(event)
+            | Event::SubscriptionUpdate(event)
+            | Event::SubscriptionDelete(event) => &event.raw,
+            Event::IntegrationCreate(event) | Event::IntegrationUpdate(event) => &event.raw,
+            Event::IntegrationDelete(event) => &event.raw,
+            Event::GuildSoundboardSoundCreate(event) | Event::GuildSoundboardSoundUpdate(event) => {
+                &event.raw
+            }
+            Event::GuildSoundboardSoundDelete(event) => &event.raw,
+            Event::GuildSoundboardSoundsUpdate(event) | Event::SoundboardSounds(event) => {
+                &event.raw
+            }
             Event::WebhooksUpdate(event) => &event.raw,
             Event::InviteCreate(event) | Event::InviteDelete(event) => &event.raw,
             Event::MessageReactionAdd(event) | Event::MessageReactionRemove(event) => &event.raw,
             Event::MessageReactionRemoveAll(event) => &event.raw,
             Event::TypingStart(event) => &event.raw,
             Event::PresenceUpdate(event) => &event.raw,
+            Event::UserUpdate(event) => &event.raw,
             Event::InteractionCreate(event) => &event.raw,
             Event::VoiceStateUpdate(event) => &event.raw,
             Event::VoiceServerUpdate(event) => &event.raw,
+            Event::ThreadCreate(event)
+            | Event::ThreadUpdate(event)
+            | Event::ThreadDelete(event) => &event.raw,
+            Event::ThreadListSync(event) => &event.raw,
+            Event::ThreadMemberUpdate(event) => &event.raw,
+            Event::ThreadMembersUpdate(event) => &event.raw,
+            Event::MessageReactionRemoveEmoji(event) => &event.raw,
+            Event::MessagePollVoteAdd(event) | Event::MessagePollVoteRemove(event) => &event.raw,
+            Event::GuildStickersUpdate(event) => &event.raw,
+            Event::GuildScheduledEventCreate(event)
+            | Event::GuildScheduledEventUpdate(event)
+            | Event::GuildScheduledEventDelete(event) => &event.raw,
+            Event::AutoModerationRuleCreate(event)
+            | Event::AutoModerationRuleUpdate(event)
+            | Event::AutoModerationRuleDelete(event)
+            | Event::AutoModerationActionExecution(event) => &event.raw,
+            Event::GuildAuditLogEntryCreate(event) => &event.raw,
             Event::Unknown { raw, .. } => raw,
         }
     }
@@ -548,6 +816,10 @@ pub fn decode_event(event_name: &str, data: Value) -> Result<Event, DiscordError
                 .and_then(|v| v.as_str().map(String::from)),
             raw: data,
         }),
+        "USER_UPDATE" => Event::UserUpdate(UserUpdateEvent {
+            user: serde_json::from_value(data.clone())?,
+            raw: data,
+        }),
         "INTERACTION_CREATE" => Event::InteractionCreate(InteractionEvent {
             interaction: parse_interaction(&data)?,
             raw: data,
@@ -560,6 +832,169 @@ pub fn decode_event(event_name: &str, data: Value) -> Result<Event, DiscordError
             data: serde_json::from_value(data.clone())?,
             raw: data,
         }),
+        "THREAD_CREATE" => Event::ThreadCreate(ThreadEvent {
+            thread: serde_json::from_value(data.clone())?,
+            raw: data,
+        }),
+        "THREAD_UPDATE" => Event::ThreadUpdate(ThreadEvent {
+            thread: serde_json::from_value(data.clone())?,
+            raw: data,
+        }),
+        "THREAD_DELETE" => Event::ThreadDelete(ThreadEvent {
+            thread: serde_json::from_value(data.clone())?,
+            raw: data,
+        }),
+        "THREAD_LIST_SYNC" => Event::ThreadListSync(ThreadListSyncEvent {
+            guild_id: data
+                .get("guild_id")
+                .and_then(|v| serde_json::from_value(v.clone()).ok()),
+            threads: data
+                .get("threads")
+                .and_then(|v| serde_json::from_value(v.clone()).ok())
+                .unwrap_or_default(),
+            raw: data,
+        }),
+        "THREAD_MEMBER_UPDATE" => Event::ThreadMemberUpdate(ThreadMemberUpdateEvent {
+            guild_id: data
+                .get("guild_id")
+                .and_then(|v| serde_json::from_value(v.clone()).ok()),
+            thread_id: data
+                .get("id")
+                .and_then(|v| serde_json::from_value(v.clone()).ok()),
+            raw: data,
+        }),
+        "THREAD_MEMBERS_UPDATE" => Event::ThreadMembersUpdate(ThreadMembersUpdateEvent {
+            guild_id: data
+                .get("guild_id")
+                .and_then(|v| serde_json::from_value(v.clone()).ok()),
+            thread_id: data
+                .get("id")
+                .and_then(|v| serde_json::from_value(v.clone()).ok()),
+            added_members: data
+                .get("added_members")
+                .and_then(|v| serde_json::from_value(v.clone()).ok()),
+            removed_member_ids: data
+                .get("removed_member_ids")
+                .and_then(|v| serde_json::from_value(v.clone()).ok()),
+            member_count: data.get("member_count").and_then(|v| v.as_u64()),
+            raw: data,
+        }),
+        "MESSAGE_REACTION_REMOVE_EMOJI" => {
+            Event::MessageReactionRemoveEmoji(ReactionRemoveEmojiEvent {
+                channel_id: data
+                    .get("channel_id")
+                    .and_then(|v| serde_json::from_value(v.clone()).ok()),
+                message_id: data
+                    .get("message_id")
+                    .and_then(|v| serde_json::from_value(v.clone()).ok()),
+                guild_id: data
+                    .get("guild_id")
+                    .and_then(|v| serde_json::from_value(v.clone()).ok()),
+                emoji: data
+                    .get("emoji")
+                    .and_then(|v| serde_json::from_value(v.clone()).ok()),
+                raw: data,
+            })
+        }
+        "GUILD_STICKERS_UPDATE" => Event::GuildStickersUpdate(GuildStickersUpdateEvent {
+            guild_id: data
+                .get("guild_id")
+                .and_then(|v| serde_json::from_value(v.clone()).ok()),
+            stickers: data
+                .get("stickers")
+                .and_then(|v| serde_json::from_value(v.clone()).ok())
+                .unwrap_or_default(),
+            raw: data,
+        }),
+        "ENTITLEMENT_CREATE" => Event::EntitlementCreate(EntitlementEvent {
+            entitlement: serde_json::from_value(data.clone())?,
+            raw: data,
+        }),
+        "ENTITLEMENT_UPDATE" => Event::EntitlementUpdate(EntitlementEvent {
+            entitlement: serde_json::from_value(data.clone())?,
+            raw: data,
+        }),
+        "ENTITLEMENT_DELETE" => Event::EntitlementDelete(EntitlementEvent {
+            entitlement: serde_json::from_value(data.clone())?,
+            raw: data,
+        }),
+        "SUBSCRIPTION_CREATE" => Event::SubscriptionCreate(SubscriptionEvent {
+            subscription: serde_json::from_value(data.clone())?,
+            raw: data,
+        }),
+        "SUBSCRIPTION_UPDATE" => Event::SubscriptionUpdate(SubscriptionEvent {
+            subscription: serde_json::from_value(data.clone())?,
+            raw: data,
+        }),
+        "SUBSCRIPTION_DELETE" => Event::SubscriptionDelete(SubscriptionEvent {
+            subscription: serde_json::from_value(data.clone())?,
+            raw: data,
+        }),
+        "INTEGRATION_CREATE" => Event::IntegrationCreate(IntegrationEvent {
+            guild_id: read_optional_snowflake(&data, "guild_id"),
+            integration: serde_json::from_value(data.clone())?,
+            raw: data,
+        }),
+        "INTEGRATION_UPDATE" => Event::IntegrationUpdate(IntegrationEvent {
+            guild_id: read_optional_snowflake(&data, "guild_id"),
+            integration: serde_json::from_value(data.clone())?,
+            raw: data,
+        }),
+        "INTEGRATION_DELETE" => Event::IntegrationDelete(IntegrationDeleteEvent {
+            id: read_optional_snowflake(&data, "id"),
+            guild_id: read_optional_snowflake(&data, "guild_id"),
+            application_id: read_optional_snowflake(&data, "application_id"),
+            raw: data,
+        }),
+        "GUILD_SOUNDBOARD_SOUND_CREATE" => {
+            Event::GuildSoundboardSoundCreate(SoundboardSoundEvent {
+                sound: serde_json::from_value(data.clone())?,
+                raw: data,
+            })
+        }
+        "GUILD_SOUNDBOARD_SOUND_UPDATE" => {
+            Event::GuildSoundboardSoundUpdate(SoundboardSoundEvent {
+                sound: serde_json::from_value(data.clone())?,
+                raw: data,
+            })
+        }
+        "GUILD_SOUNDBOARD_SOUND_DELETE" => {
+            Event::GuildSoundboardSoundDelete(SoundboardSoundDeleteEvent {
+                sound_id: read_required_snowflake(&data, "sound_id")?,
+                guild_id: read_required_snowflake(&data, "guild_id")?,
+                raw: data,
+            })
+        }
+        "GUILD_SOUNDBOARD_SOUNDS_UPDATE" => {
+            Event::GuildSoundboardSoundsUpdate(decode_soundboard_sounds_event(data)?)
+        }
+        "SOUNDBOARD_SOUNDS" => Event::SoundboardSounds(decode_soundboard_sounds_event(data)?),
+        "GUILD_SCHEDULED_EVENT_CREATE" => {
+            Event::GuildScheduledEventCreate(decode_scheduled_event(data)?)
+        }
+        "GUILD_SCHEDULED_EVENT_UPDATE" => {
+            Event::GuildScheduledEventUpdate(decode_scheduled_event(data)?)
+        }
+        "GUILD_SCHEDULED_EVENT_DELETE" => {
+            Event::GuildScheduledEventDelete(decode_scheduled_event(data)?)
+        }
+        "AUTO_MODERATION_RULE_CREATE" => {
+            Event::AutoModerationRuleCreate(decode_auto_moderation_event(data))
+        }
+        "AUTO_MODERATION_RULE_UPDATE" => {
+            Event::AutoModerationRuleUpdate(decode_auto_moderation_event(data))
+        }
+        "AUTO_MODERATION_RULE_DELETE" => {
+            Event::AutoModerationRuleDelete(decode_auto_moderation_event(data))
+        }
+        "AUTO_MODERATION_ACTION_EXECUTION" => {
+            Event::AutoModerationActionExecution(decode_auto_moderation_event(data))
+        }
+        "GUILD_AUDIT_LOG_ENTRY_CREATE" => {
+            Event::GuildAuditLogEntryCreate(decode_audit_log_entry_event(data))
+        }
+        "MESSAGE_POLL_VOTE_ADD" => Event::MessagePollVoteAdd(decode_poll_vote_event(data)),
+        "MESSAGE_POLL_VOTE_REMOVE" => Event::MessagePollVoteRemove(decode_poll_vote_event(data)),
         _ => Event::Unknown {
             kind: event_name.to_string(),
             raw: data,
@@ -577,6 +1012,116 @@ fn read_required_snowflake(value: &Value, field: &str) -> Result<Snowflake, Disc
     serde_json::from_value(raw.clone()).map_err(Into::into)
 }
 
+fn read_optional_snowflake(value: &Value, field: &str) -> Option<Snowflake> {
+    value
+        .get(field)
+        .and_then(|v| serde_json::from_value(v.clone()).ok())
+}
+
+fn read_optional_string(value: &Value, field: &str) -> Option<String> {
+    value.get(field).and_then(|v| v.as_str().map(String::from))
+}
+
+fn read_optional_u64(value: &Value, field: &str) -> Option<u64> {
+    value.get(field).and_then(Value::as_u64)
+}
+
+fn decode_scheduled_event(data: Value) -> Result<ScheduledEvent, DiscordError> {
+    Ok(ScheduledEvent {
+        id: read_optional_snowflake(&data, "id"),
+        guild_id: read_optional_snowflake(&data, "guild_id"),
+        channel_id: read_optional_snowflake(&data, "channel_id"),
+        creator_id: read_optional_snowflake(&data, "creator_id"),
+        name: read_optional_string(&data, "name"),
+        description: read_optional_string(&data, "description"),
+        scheduled_start_time: read_optional_string(&data, "scheduled_start_time"),
+        scheduled_end_time: read_optional_string(&data, "scheduled_end_time"),
+        privacy_level: read_optional_u64(&data, "privacy_level"),
+        status: read_optional_u64(&data, "status"),
+        entity_type: read_optional_u64(&data, "entity_type"),
+        entity_id: read_optional_snowflake(&data, "entity_id"),
+        entity_metadata: data.get("entity_metadata").cloned(),
+        user_count: read_optional_u64(&data, "user_count"),
+        image: read_optional_string(&data, "image"),
+        raw: data,
+    })
+}
+
+fn decode_soundboard_sounds_event(data: Value) -> Result<SoundboardSoundsEvent, DiscordError> {
+    Ok(SoundboardSoundsEvent {
+        guild_id: read_required_snowflake(&data, "guild_id")?,
+        soundboard_sounds: data
+            .get("soundboard_sounds")
+            .and_then(|v| serde_json::from_value(v.clone()).ok())
+            .unwrap_or_default(),
+        raw: data,
+    })
+}
+
+fn decode_poll_vote_event(data: Value) -> PollVoteEvent {
+    PollVoteEvent {
+        user_id: read_optional_snowflake(&data, "user_id"),
+        channel_id: read_optional_snowflake(&data, "channel_id"),
+        message_id: read_optional_snowflake(&data, "message_id"),
+        guild_id: read_optional_snowflake(&data, "guild_id"),
+        answer_id: read_optional_u64(&data, "answer_id"),
+        raw: data,
+    }
+}
+
+fn decode_auto_moderation_event(data: Value) -> AutoModerationEvent {
+    AutoModerationEvent {
+        id: read_optional_snowflake(&data, "id"),
+        guild_id: read_optional_snowflake(&data, "guild_id"),
+        name: read_optional_string(&data, "name"),
+        creator_id: read_optional_snowflake(&data, "creator_id"),
+        event_type: read_optional_u64(&data, "event_type"),
+        trigger_type: read_optional_u64(&data, "trigger_type"),
+        trigger_metadata: data.get("trigger_metadata").cloned(),
+        actions: data
+            .get("actions")
+            .and_then(|v| serde_json::from_value(v.clone()).ok())
+            .unwrap_or_default(),
+        enabled: data.get("enabled").and_then(Value::as_bool),
+        exempt_roles: data
+            .get("exempt_roles")
+            .and_then(|v| serde_json::from_value(v.clone()).ok())
+            .unwrap_or_default(),
+        exempt_channels: data
+            .get("exempt_channels")
+            .and_then(|v| serde_json::from_value(v.clone()).ok())
+            .unwrap_or_default(),
+        action: data.get("action").cloned(),
+        rule_id: read_optional_snowflake(&data, "rule_id"),
+        rule_trigger_type: read_optional_u64(&data, "rule_trigger_type"),
+        user_id: read_optional_snowflake(&data, "user_id"),
+        channel_id: read_optional_snowflake(&data, "channel_id"),
+        message_id: read_optional_snowflake(&data, "message_id"),
+        alert_system_message_id: read_optional_snowflake(&data, "alert_system_message_id"),
+        content: read_optional_string(&data, "content"),
+        matched_keyword: read_optional_string(&data, "matched_keyword"),
+        matched_content: read_optional_string(&data, "matched_content"),
+        raw: data,
+    }
+}
+
+fn decode_audit_log_entry_event(data: Value) -> AuditLogEntryEvent {
+    AuditLogEntryEvent {
+        guild_id: read_optional_snowflake(&data, "guild_id"),
+        entry: serde_json::from_value(data.clone()).ok(),
+        id: read_optional_snowflake(&data, "id"),
+        user_id: read_optional_snowflake(&data, "user_id"),
+        target_id: read_optional_snowflake(&data, "target_id"),
+        action_type: read_optional_u64(&data, "action_type"),
+        changes: data
+            .get("changes")
+            .and_then(|v| serde_json::from_value(v.clone()).ok()),
+        options: data.get("options").cloned(),
+        reason: read_optional_string(&data, "reason"),
+        raw: data,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::{json, Value};
@@ -584,8 +1129,9 @@ mod tests {
     use super::*;
     use crate::error::DiscordError;
     use crate::model::{
-        Channel, Guild, Interaction, InteractionContextData, Member, Message, PingInteraction,
-        Role, Snowflake, User, VoiceServerUpdate, VoiceState,
+        Channel, Entitlement, Guild, Integration, IntegrationAccount, Interaction,
+        InteractionContextData, Member, Message, PingInteraction, Role, Snowflake, SoundboardSound,
+        Subscription, User, VoiceServerUpdate, VoiceState,
     };
     use crate::types::Emoji;
 
@@ -1022,6 +1568,181 @@ mod tests {
                 assert_eq!(event.data.role_id, snowflake("6"));
             }
             other => panic!("unexpected role delete event: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn decode_event_exposes_common_fields_for_newer_gateway_payloads() {
+        match decode_event(
+            "GUILD_SCHEDULED_EVENT_CREATE",
+            json!({
+                "id": "700",
+                "guild_id": "701",
+                "channel_id": "702",
+                "creator_id": "703",
+                "name": "Launch",
+                "description": "Release stream",
+                "scheduled_start_time": "2026-04-30T01:00:00Z",
+                "scheduled_end_time": "2026-04-30T02:00:00Z",
+                "privacy_level": 2,
+                "status": 1,
+                "entity_type": 2,
+                "entity_id": "704",
+                "entity_metadata": { "location": "voice" },
+                "user_count": 42,
+                "image": "cover"
+            }),
+        )
+        .unwrap()
+        {
+            Event::GuildScheduledEventCreate(event) => {
+                assert_eq!(event.id, Some(snowflake("700")));
+                assert_eq!(event.guild_id, Some(snowflake("701")));
+                assert_eq!(event.channel_id, Some(snowflake("702")));
+                assert_eq!(event.creator_id, Some(snowflake("703")));
+                assert_eq!(event.name.as_deref(), Some("Launch"));
+                assert_eq!(event.description.as_deref(), Some("Release stream"));
+                assert_eq!(
+                    event.scheduled_start_time.as_deref(),
+                    Some("2026-04-30T01:00:00Z")
+                );
+                assert_eq!(event.status, Some(1));
+                assert_eq!(event.entity_type, Some(2));
+                assert_eq!(event.entity_id, Some(snowflake("704")));
+                assert_eq!(event.entity_metadata, Some(json!({ "location": "voice" })));
+                assert_eq!(event.user_count, Some(42));
+                assert_eq!(event.image.as_deref(), Some("cover"));
+            }
+            other => panic!("unexpected scheduled event: {other:?}"),
+        }
+
+        match decode_event(
+            "AUTO_MODERATION_RULE_CREATE",
+            json!({
+                "id": "710",
+                "guild_id": "711",
+                "name": "Keyword Filter",
+                "creator_id": "712",
+                "event_type": 1,
+                "trigger_type": 1,
+                "trigger_metadata": { "keyword_filter": ["bad"] },
+                "actions": [{ "type": 1 }],
+                "enabled": true,
+                "exempt_roles": ["713"],
+                "exempt_channels": ["714"]
+            }),
+        )
+        .unwrap()
+        {
+            Event::AutoModerationRuleCreate(event) => {
+                assert_eq!(event.id, Some(snowflake("710")));
+                assert_eq!(event.guild_id, Some(snowflake("711")));
+                assert_eq!(event.name.as_deref(), Some("Keyword Filter"));
+                assert_eq!(event.creator_id, Some(snowflake("712")));
+                assert_eq!(event.event_type, Some(1));
+                assert_eq!(event.trigger_type, Some(1));
+                assert_eq!(
+                    event.trigger_metadata,
+                    Some(json!({ "keyword_filter": ["bad"] }))
+                );
+                assert_eq!(event.actions, vec![json!({ "type": 1 })]);
+                assert_eq!(event.enabled, Some(true));
+                assert_eq!(event.exempt_roles, vec![snowflake("713")]);
+                assert_eq!(event.exempt_channels, vec![snowflake("714")]);
+            }
+            other => panic!("unexpected auto moderation rule event: {other:?}"),
+        }
+
+        match decode_event(
+            "AUTO_MODERATION_ACTION_EXECUTION",
+            json!({
+                "guild_id": "720",
+                "action": { "type": 2, "metadata": { "channel_id": "721" } },
+                "rule_id": "722",
+                "rule_trigger_type": 1,
+                "user_id": "723",
+                "channel_id": "724",
+                "message_id": "725",
+                "alert_system_message_id": "726",
+                "content": "blocked text",
+                "matched_keyword": "blocked",
+                "matched_content": "blocked"
+            }),
+        )
+        .unwrap()
+        {
+            Event::AutoModerationActionExecution(event) => {
+                assert_eq!(event.guild_id, Some(snowflake("720")));
+                assert_eq!(
+                    event.action,
+                    Some(json!({ "type": 2, "metadata": { "channel_id": "721" } }))
+                );
+                assert_eq!(event.rule_id, Some(snowflake("722")));
+                assert_eq!(event.rule_trigger_type, Some(1));
+                assert_eq!(event.user_id, Some(snowflake("723")));
+                assert_eq!(event.channel_id, Some(snowflake("724")));
+                assert_eq!(event.message_id, Some(snowflake("725")));
+                assert_eq!(event.alert_system_message_id, Some(snowflake("726")));
+                assert_eq!(event.content.as_deref(), Some("blocked text"));
+                assert_eq!(event.matched_keyword.as_deref(), Some("blocked"));
+                assert_eq!(event.matched_content.as_deref(), Some("blocked"));
+            }
+            other => panic!("unexpected auto moderation action event: {other:?}"),
+        }
+
+        match decode_event(
+            "GUILD_AUDIT_LOG_ENTRY_CREATE",
+            json!({
+                "guild_id": "730",
+                "id": "731",
+                "user_id": "732",
+                "target_id": "733",
+                "action_type": 22,
+                "changes": [{ "key": "nick", "new_value": "new" }],
+                "options": { "delete_member_days": "1" },
+                "reason": "cleanup"
+            }),
+        )
+        .unwrap()
+        {
+            Event::GuildAuditLogEntryCreate(event) => {
+                assert_eq!(event.guild_id, Some(snowflake("730")));
+                assert_eq!(event.id, Some(snowflake("731")));
+                assert_eq!(event.user_id, Some(snowflake("732")));
+                assert_eq!(event.target_id, Some(snowflake("733")));
+                assert_eq!(event.action_type, Some(22));
+                assert_eq!(
+                    event.changes,
+                    Some(vec![json!({ "key": "nick", "new_value": "new" })])
+                );
+                assert_eq!(event.options, Some(json!({ "delete_member_days": "1" })));
+                assert_eq!(event.reason.as_deref(), Some("cleanup"));
+                assert_eq!(
+                    event
+                        .entry
+                        .as_ref()
+                        .and_then(|entry| entry.id.as_ref())
+                        .map(Snowflake::as_str),
+                    Some("731")
+                );
+            }
+            other => panic!("unexpected audit log entry event: {other:?}"),
+        }
+
+        match decode_event(
+            "USER_UPDATE",
+            json!({
+                "id": "740",
+                "username": "bot"
+            }),
+        )
+        .unwrap()
+        {
+            Event::UserUpdate(event) => {
+                assert_eq!(event.user.id, snowflake("740"));
+                assert_eq!(event.user.username, "bot");
+            }
+            other => panic!("unexpected user update event: {other:?}"),
         }
     }
 
@@ -1871,6 +2592,96 @@ mod tests {
                 }),
             ),
             (
+                "ENTITLEMENT_CREATE",
+                Event::EntitlementCreate(EntitlementEvent {
+                    entitlement: Entitlement {
+                        id: snowflake("930"),
+                        sku_id: snowflake("931"),
+                        application_id: snowflake("932"),
+                        kind: 8,
+                        deleted: false,
+                        ..Entitlement::default()
+                    },
+                    raw: raw("ENTITLEMENT_CREATE"),
+                }),
+            ),
+            (
+                "SUBSCRIPTION_CREATE",
+                Event::SubscriptionCreate(SubscriptionEvent {
+                    subscription: Subscription {
+                        id: snowflake("940"),
+                        user_id: snowflake("941"),
+                        current_period_start: "2026-04-01T00:00:00Z".to_string(),
+                        current_period_end: "2026-05-01T00:00:00Z".to_string(),
+                        status: 0,
+                        ..Subscription::default()
+                    },
+                    raw: raw("SUBSCRIPTION_CREATE"),
+                }),
+            ),
+            (
+                "INTEGRATION_CREATE",
+                Event::IntegrationCreate(IntegrationEvent {
+                    guild_id: Some(snowflake("942")),
+                    integration: Integration {
+                        id: snowflake("943"),
+                        name: "integration".to_string(),
+                        kind: "discord".to_string(),
+                        account: IntegrationAccount {
+                            id: "account".to_string(),
+                            name: "account".to_string(),
+                        },
+                        ..Integration::default()
+                    },
+                    raw: raw("INTEGRATION_CREATE"),
+                }),
+            ),
+            (
+                "INTEGRATION_DELETE",
+                Event::IntegrationDelete(IntegrationDeleteEvent {
+                    id: Some(snowflake("944")),
+                    guild_id: Some(snowflake("945")),
+                    application_id: Some(snowflake("946")),
+                    raw: raw("INTEGRATION_DELETE"),
+                }),
+            ),
+            (
+                "GUILD_SOUNDBOARD_SOUND_CREATE",
+                Event::GuildSoundboardSoundCreate(SoundboardSoundEvent {
+                    sound: SoundboardSound {
+                        name: "quack".to_string(),
+                        sound_id: snowflake("933"),
+                        guild_id: Some(snowflake("934")),
+                        volume: 1.0,
+                        available: true,
+                        ..SoundboardSound::default()
+                    },
+                    raw: raw("GUILD_SOUNDBOARD_SOUND_CREATE"),
+                }),
+            ),
+            (
+                "GUILD_SOUNDBOARD_SOUND_DELETE",
+                Event::GuildSoundboardSoundDelete(SoundboardSoundDeleteEvent {
+                    sound_id: snowflake("935"),
+                    guild_id: snowflake("936"),
+                    raw: raw("GUILD_SOUNDBOARD_SOUND_DELETE"),
+                }),
+            ),
+            (
+                "SOUNDBOARD_SOUNDS",
+                Event::SoundboardSounds(SoundboardSoundsEvent {
+                    guild_id: snowflake("937"),
+                    soundboard_sounds: vec![SoundboardSound {
+                        name: "quack".to_string(),
+                        sound_id: snowflake("938"),
+                        volume: 1.0,
+                        available: true,
+                        ..SoundboardSound::default()
+                    }],
+                    raw: raw("SOUNDBOARD_SOUNDS"),
+                }),
+            ),
+            (
                 "WEBHOOKS_UPDATE",
                 Event::WebhooksUpdate(WebhooksUpdateEvent {
                     guild_id: Some(snowflake("94")),
@@ -1894,6 +2705,17 @@ mod tests {
                     channel_id: Some(snowflake("99")),
                     code: Some("invite-delete".to_string()),
                     raw: raw("INVITE_DELETE"),
+                }),
+            ),
+            (
+                "MESSAGE_POLL_VOTE_ADD",
+                Event::MessagePollVoteAdd(PollVoteEvent {
+                    user_id: Some(snowflake("980")),
+                    channel_id: Some(snowflake("981")),
+                    message_id: Some(snowflake("982")),
+                    guild_id: Some(snowflake("983")),
+                    answer_id: Some(1),
+                    raw: raw("MESSAGE_POLL_VOTE_ADD"),
                 }),
             ),
             (
@@ -1926,6 +2748,162 @@ mod tests {
 
         for (kind, event) in cases {
             assert_kind_and_raw(event, kind);
+        }
+    }
+
+    #[test]
+    fn decode_event_handles_entitlement_and_soundboard_events() {
+        let entitlement = decode_event(
+            "ENTITLEMENT_UPDATE",
+            json!({
+                "id": "1",
+                "sku_id": "2",
+                "application_id": "3",
+                "type": 8,
+                "deleted": false,
+                "consumed": false
+            }),
+        )
+        .unwrap();
+        match entitlement {
+            Event::EntitlementUpdate(event) => {
+                assert_eq!(event.entitlement.sku_id.as_str(), "2");
+                assert!(!event.entitlement.deleted);
+            }
+            other => panic!("unexpected event: {other:?}"),
+        }
+
+        let subscription = decode_event(
+            "SUBSCRIPTION_UPDATE",
+            json!({
+                "id": "30",
+                "user_id": "31",
+                "sku_ids": ["32"],
+                "entitlement_ids": ["33"],
+                "current_period_start": "2026-04-01T00:00:00Z",
+                "current_period_end": "2026-05-01T00:00:00Z",
+                "status": 1
+            }),
+        )
+        .unwrap();
+        match subscription {
+            Event::SubscriptionUpdate(event) => {
+                assert_eq!(event.subscription.id.as_str(), "30");
+                assert_eq!(event.subscription.status, 1);
+            }
+            other => panic!("unexpected event: {other:?}"),
+        }
+
+        let integration = decode_event(
+            "INTEGRATION_CREATE",
+            json!({
+                "id": "40",
+                "guild_id": "41",
+                "name": "integration",
+                "type": "discord",
+                "enabled": true,
+                "account": { "id": "acc", "name": "account" }
+            }),
+        )
+        .unwrap();
+        match integration {
+            Event::IntegrationCreate(event) => {
+                assert_eq!(event.guild_id.unwrap().as_str(), "41");
+                assert_eq!(event.integration.id.as_str(), "40");
+            }
+            other => panic!("unexpected event: {other:?}"),
+        }
+
+        let integration_delete = decode_event(
+            "INTEGRATION_DELETE",
+            json!({
+                "id": "40",
+                "guild_id": "41",
+                "application_id": "42"
+            }),
+        )
+        .unwrap();
+        match integration_delete {
+            Event::IntegrationDelete(event) => {
+                assert_eq!(event.id.unwrap().as_str(), "40");
+                assert_eq!(event.application_id.unwrap().as_str(), "42");
+            }
+            other => panic!("unexpected event: {other:?}"),
+        }
+
+        let poll_vote = decode_event(
+            "MESSAGE_POLL_VOTE_REMOVE",
+            json!({
+                "user_id": "50",
+                "channel_id": "51",
+                "message_id": "52",
+                "guild_id": "53",
+                "answer_id": 2
+            }),
+        )
+        .unwrap();
+        match poll_vote {
+            Event::MessagePollVoteRemove(event) => {
+                assert_eq!(event.user_id.unwrap().as_str(), "50");
+                assert_eq!(event.answer_id, Some(2));
+            }
+            other => panic!("unexpected event: {other:?}"),
+        }
+
+        let sound = decode_event(
+            "GUILD_SOUNDBOARD_SOUND_UPDATE",
+            json!({
+                "name": "quack",
+                "sound_id": "10",
+                "volume": 1.0,
+                "guild_id": "20",
+                "available": true
+            }),
+        )
+        .unwrap();
+        match sound {
+            Event::GuildSoundboardSoundUpdate(event) => {
+                assert_eq!(event.sound.sound_id.as_str(), "10");
+                assert_eq!(event.sound.guild_id.unwrap().as_str(), "20");
+            }
+            other => panic!("unexpected event: {other:?}"),
+        }
+
+        let delete = decode_event(
+            "GUILD_SOUNDBOARD_SOUND_DELETE",
+            json!({
+                "sound_id": "10",
+                "guild_id": "20"
+            }),
+        )
+        .unwrap();
+        match delete {
+            Event::GuildSoundboardSoundDelete(event) => {
+                assert_eq!(event.sound_id.as_str(), "10");
+                assert_eq!(event.guild_id.as_str(), "20");
+            }
+            other => panic!("unexpected event: {other:?}"),
+        }
+
+        let sounds = decode_event(
+            "GUILD_SOUNDBOARD_SOUNDS_UPDATE",
+            json!({
+                "guild_id": "20",
+                "soundboard_sounds": [{
+                    "name": "quack",
+                    "sound_id": "10",
+                    "volume": 1.0,
+                    "available": true
+                }]
+            }),
+        )
+        .unwrap();
+        match sounds {
+            Event::GuildSoundboardSoundsUpdate(event) => {
+                assert_eq!(event.guild_id.as_str(), "20");
+                assert_eq!(event.soundboard_sounds.len(), 1);
+            }
+            other => panic!("unexpected event: {other:?}"),
         }
     }
 }

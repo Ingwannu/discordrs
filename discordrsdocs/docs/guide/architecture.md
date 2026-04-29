@@ -1,6 +1,6 @@
 # Architecture
 
-`discordrs` is split into focused modules so you can compose only what you need.
+`discord.rs` is split into focused modules so you can compose only what you need.
 
 ```mermaid
 flowchart LR

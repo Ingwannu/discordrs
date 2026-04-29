@@ -1,6 +1,8 @@
-# discordrs Usage
+# discord.rs Usage
 
-`discordrs` is a standalone Rust Discord framework with typed models, typed gateway events, command builders, Components V2 builders, REST helpers, cache managers, collectors, sharding control, and voice runtime foundations.
+`discord.rs` is a standalone Rust Discord framework with typed models, typed gateway events, command builders, Components V2 builders, REST helpers, cache managers, collectors, sharding control, and voice runtime foundations.
+
+Brand name: discord.rs. The crates.io package name and Rust import path remain `discordrs`.
 
 ## 1. Installation
 
@@ -9,28 +11,28 @@ Pick features based on the runtime surface you want to ship.
 ```toml
 [dependencies]
 # Core only: models, builders, parsers, helpers, REST client
-discordrs = "1.0.0"
+discordrs = "1.1.0"
 
 # Gateway runtime
-discordrs = { version = "1.0.0", features = ["gateway"] }
+discordrs = { version = "1.1.0", features = ["gateway"] }
 
 # HTTP interactions endpoint
-discordrs = { version = "1.0.0", features = ["interactions"] }
+discordrs = { version = "1.1.0", features = ["interactions"] }
 
 # Gateway runtime with cache storage enabled
-discordrs = { version = "1.0.0", features = ["gateway", "cache"] }
+discordrs = { version = "1.1.0", features = ["gateway", "cache"] }
 
 # Gateway runtime with collectors
-discordrs = { version = "1.0.0", features = ["gateway", "collectors"] }
+discordrs = { version = "1.1.0", features = ["gateway", "collectors"] }
 
 # Gateway runtime with shard supervisor and shard status APIs
-discordrs = { version = "1.0.0", features = ["gateway", "sharding"] }
+discordrs = { version = "1.1.0", features = ["gateway", "sharding"] }
 
 # Voice manager plus voice gateway/UDP runtime
-discordrs = { version = "1.0.0", features = ["voice"] }
+discordrs = { version = "1.1.0", features = ["voice"] }
 
 # Gateway runtime with voice helpers
-discordrs = { version = "1.0.0", features = ["gateway", "voice"] }
+discordrs = { version = "1.1.0", features = ["gateway", "voice"] }
 ```
 
 If you want the common runtime helpers in one import, prefer:
@@ -412,7 +414,7 @@ async fn join_and_prepare_voice(ctx: &discordrs::Context) -> Result<(), discordr
 If you already have a full runtime config, connect directly:
 
 ```rust
-use discordrs::{connect_voice_runtime, VoiceRuntimeConfig, VoiceSpeakingFlags};
+use discordrs::{connect_voice_runtime, VoiceOpusDecoder, VoiceRuntimeConfig, VoiceSpeakingFlags};
 
 async fn connect_runtime() -> Result<(), discordrs::DiscordError> {
     let handle = connect_voice_runtime(VoiceRuntimeConfig::new(
@@ -425,6 +427,13 @@ async fn connect_runtime() -> Result<(), discordrs::DiscordError> {
     .await?;
 
     handle.set_speaking(VoiceSpeakingFlags::MICROPHONE, 0)?;
+    let mut decoder = VoiceOpusDecoder::discord_default()?;
+    let packet = handle.recv_decoded_voice_packet(&mut decoder, 2048).await?;
+    println!(
+        "received {} samples/channel from SSRC {}",
+        packet.samples_per_channel,
+        packet.packet.rtp.ssrc
+    );
     handle.close().await?;
     Ok(())
 }
@@ -438,9 +447,20 @@ The current runtime covers:
 - select protocol
 - session description wait
 - speaking updates
+- server speaking/SSRC-to-user tracking when the voice gateway sends that mapping
+- raw UDP packet receive
+- RTP header parsing with CSRC/extension-aware RTP-size header calculation
+- transport decrypt for `aead_aes256_gcm_rtpsize` and `aead_xchacha20_poly1305_rtpsize`
+- pure-Rust Opus decode to interleaved `i16` PCM through `VoiceOpusDecoder`
+- DAVE opcode state tracking and a `VoiceDaveFrameDecryptor` hook
+- experimental `VoiceDaveyDecryptor` when the `dave` feature is enabled
 - graceful close
 
-It does not yet implement the full encrypted media pipeline.
+The default `voice` feature returns transport-decrypted Opus frames and can decode them to PCM.
+`recv_voice_packet(...)` still rejects active DAVE sessions unless the caller uses
+`recv_voice_packet_with_dave(...)` or `recv_decoded_voice_packet_with_dave(...)` with a DAVE decryptor.
+The `dave` feature exposes a `davey`/OpenMLS-backed decryptor wrapper, but live Discord DAVE
+interoperability still depends on handling the full gateway MLS transition lifecycle for the target voice session.
 
 ## 12. Modal and Components V2 Helpers
 
@@ -486,6 +506,16 @@ async fn handle_modal(http: &DiscordHttpClient, payload: &Value) -> Result<(), d
 - `Context::new(http, data)`
 - `Context::rest()`
 - `RestClient::new(token, application_id)`
+- `get_poll_answer_voters(...)`
+- `end_poll(...)`
+- `get_sku_subscriptions(...)`
+- `get_sku_subscription(...)`
+- `get_guild_integrations(...)`
+- `list_thread_members(...)`
+- `list_public_archived_threads(...)`
+- `list_private_archived_threads(...)`
+- `list_joined_private_archived_threads(...)`
+- `get_active_guild_threads(...)`
 - `SlashCommandBuilder`, `UserCommandBuilder`, `MessageCommandBuilder`
 - `MessageBuilder`, `InteractionResponseBuilder`
 - `send_message(...)`
@@ -503,6 +533,9 @@ async fn handle_modal(http: &DiscordHttpClient, payload: &Value) -> Result<(), d
 - `ShardSupervisor`
 - `VoiceRuntimeConfig`
 - `connect_voice_runtime(...)`
+- `VoiceOpusDecoder`
+- `VoiceDaveFrameDecryptor`
+- `VoiceDaveyDecryptor` with `voice,dave`
 
 ## 14. Notes
 
@@ -516,7 +549,8 @@ async fn handle_modal(http: &DiscordHttpClient, payload: &Value) -> Result<(), d
 - Use `ApplicationCommand::id_opt()` until Discord has assigned an ID. Unsaved commands are no longer treated as generic `DiscordModel`s.
 - `spawn_shards(...)` is the right choice when you want status inspection, manual shutdown, or supervisor-driven shard control.
 - `start_shards(...)` is the right choice when you only want the runtime to own the shard lifecycle and block until it exits.
-- `voice` currently provides runtime handshake and state plumbing, not a full production media transport stack.
+- `voice` currently provides handshake, state plumbing, raw UDP receive, transport-decrypted Opus frames, and PCM decode. Full DAVE/MLS operation is exposed through an experimental feature because it requires live gateway MLS transition handling.
+- Poll vote, subscription, integration, entitlement, soundboard, invite, thread, and forum data now have typed models/events or REST wrappers where Discord documents them.
 
 ## 15. Testing And Coverage
 

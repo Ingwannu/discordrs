@@ -1,16 +1,18 @@
-# discordrs Library Documentation
+# discord.rs Library Documentation
 
 > This manual still contains low-level historical detail, but the current docs site now prefers `Client`, `RestClient`, typed models/events, command builders, cache managers, and collectors. Start with [Getting Started](getting-started.md), [Architecture](architecture.md), and the new API pages before using the older sections below.
 
 ## Overview
 
-discordrs is a standalone Rust framework for building Discord bots. It provides:
+discord.rs is a standalone Rust framework for building Discord bots. It provides:
 
 - **Gateway WebSocket runtime** for connecting, heartbeating, identifying, resuming, and dispatching events.
 - **HTTP REST client** with automatic rate-limit retry for sending messages, managing commands, and responding to interactions.
 - **Builders** for Components V2 payloads (buttons, selects, media galleries, modals), enabling fluent construction of rich messages.
 - **Parsers** for routing and extracting data from raw interaction payloads and V2 modal submissions.
 - **Helpers** and **Interaction Endpoint** support for easily replying to slash commands, component interactions, and modal submissions.
+- **Voice receive helpers** for voice gateway/UDP setup, RTP-size transport decrypt, Opus PCM decode, and experimental DAVE hooks.
+- **Typed Discord coverage** for polls, subscriptions, entitlements, soundboard, thread details, forum fields, invites, and integrations.
 
 This modular design separates concerns into `builders/`, `gateway/`, `parsers/`, and `http/` directories, with core types and utilities at the root.
 
@@ -237,7 +239,7 @@ Re-exports parsers and provides JSON helpers:
 - **README.md**: High-level overview, features, installation, quickstart examples.
 - **USAGE.md**: Expanded usage guide covering bot startup, message sending, and interaction flows.
 - **CHANGELOG.md**: Version history with breaking changes and new features.
-- **Cargo.toml**: Crate metadata, feature flags (`gateway`, `interactions`), and dependencies.
+- **Cargo.toml**: Crate metadata, feature flags (`gateway`, `interactions`, `cache`, `collectors`, `sharding`, `voice`, `dave`), and dependencies.
 - **LICENSE-APACHE** & **LICENSE-MIT**: Dual licensing terms.
 
 ---
