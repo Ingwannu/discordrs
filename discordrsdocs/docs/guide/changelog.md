@@ -7,6 +7,8 @@
 - Percent-encoded generated REST query strings so timestamps, comma-separated lists, and future string parameters cannot corrupt query boundaries.
 - Improved HTTP 429 handling by retrying repeated rate-limit responses up to a bounded limit while continuing to honor route and global rate-limit state.
 - Enabled the `cache` feature by default and added `CacheHandle::is_enabled()` so cache-backed manager behavior is explicit in default installs.
+- Changed `CacheConfig::default()` to use bounded retention for gateway cache data, added `ClientBuilder::cache_config(...)`, and kept `CacheConfig::unbounded()` as an explicit opt-in.
+- Redacted OAuth2 credentials from `Debug` output for OAuth2 clients, code exchanges, refresh tokens, and token responses.
 - Added `Snowflake::try_new` and `Snowflake::is_valid` for callers that want early validation while preserving the existing permissive constructor.
 - Added fallible command-choice constructors while keeping existing command builder calls panic-free.
 - Fixed the all-target Clippy warning in the gateway outbound limiter and added regression tests for invite validation, serialization errors, and repeated rate-limit retries.

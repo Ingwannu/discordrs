@@ -11,7 +11,7 @@ Brand name: discord.rs. The crates.io package name and Rust import path remain `
 - Typed `Client` runtime with `Event` enum dispatch and compatibility `BotClient` alias
 - Typed `RestClient` with shared route/global rate-limit state and compatibility `DiscordHttpClient` alias
 - `prelude::*` re-exports for common runtime, builder, helper, and response types
-- Cache-backed manager reads for guilds, channels, members, roles, presences, and messages, with optional size limits via `CacheConfig`
+- Cache-backed manager reads for guilds, channels, members, roles, presences, and messages, with bounded defaults and explicit `CacheConfig` overrides
 - Collectors for messages, interactions, components, and modals behind the `collectors` feature
 - Gateway WebSocket client with connect, heartbeat, identify, resume, reconnect, and terminal close-code handling
 - Shard supervisor and shard messenger control paths for queued shard boot, reconnect, shutdown, presence, and voice state updates
@@ -280,7 +280,8 @@ fn app(public_key: &str) -> Router {
 - Use `DiscordHttpClient::create_followup_message_with_application_id()` when you already have `InteractionContext.application_id` and the client was not initialized with an application id.
 - Prefer the typed `RestClient` methods such as `create_message`, `update_message`, `create_interaction_response_typed`, and `bulk_overwrite_*_typed`.
 - Prefer typed REST wrappers such as `bulk_guild_ban`, `get_guild_role`, `get_auto_moderation_rules_typed`, `get_guild_preview_typed`, `get_guild_vanity_url`, `get_voice_regions_typed`, `get_guild_voice_regions`, `get_current_application`, and `get_application_role_connection_metadata_records` before falling back to raw `serde_json::Value` methods.
-- Use `CacheHandle::with_config(CacheConfig::unbounded().max_messages_per_channel(...).max_total_messages(...).message_ttl(...))` for long-running bots that need bounded in-memory cache growth.
+- `CacheHandle::new()` uses bounded cache defaults so normal gateway builds do not retain every gateway entity forever.
+- Use `Client::builder(...).cache_config(...)` or `CacheHandle::with_config(...)` to tune cache limits, and use `CacheConfig::unbounded()` only when unbounded retention is intentional.
 - Use `CacheHandle::is_enabled()` when code may be compiled with `default-features = false`; cache storage is enabled in the default feature set.
 - Invite codes, webhook tokens, interaction tokens, and other token-like REST path segments are validated before authenticated paths are built.
 - Generated REST query strings are percent-encoded, and repeated HTTP 429 responses are retried up to a bounded limit before returning `DiscordError::RateLimit`.

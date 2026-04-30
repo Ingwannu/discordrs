@@ -1,3 +1,5 @@
+use std::fmt;
+
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 
@@ -7,7 +9,7 @@ use crate::types::invalid_data_error;
 const API_BASE: &str = "https://discord.com/api/v10";
 const AUTHORIZE_BASE: &str = "https://discord.com/oauth2/authorize";
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct OAuth2Client {
     client: Client,
     client_id: String,
@@ -16,6 +18,18 @@ pub struct OAuth2Client {
     api_base: String,
     #[cfg(test)]
     authorize_base: String,
+}
+
+impl fmt::Debug for OAuth2Client {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("OAuth2Client")
+            .field("client_id", &self.client_id)
+            .field(
+                "client_secret",
+                &self.client_secret.as_ref().map(|_| "[redacted]"),
+            )
+            .finish()
+    }
 }
 
 impl OAuth2Client {
@@ -256,7 +270,7 @@ impl OAuth2Scope {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct OAuth2CodeExchange {
     pub code: String,
     pub redirect_uri: String,
@@ -281,9 +295,26 @@ impl OAuth2CodeExchange {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+impl fmt::Debug for OAuth2CodeExchange {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("OAuth2CodeExchange")
+            .field("code", &"[redacted]")
+            .field("redirect_uri", &self.redirect_uri)
+            .finish()
+    }
+}
+
+#[derive(Clone, PartialEq, Eq)]
 pub struct OAuth2RefreshToken {
     pub refresh_token: String,
+}
+
+impl fmt::Debug for OAuth2RefreshToken {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("OAuth2RefreshToken")
+            .field("refresh_token", &"[redacted]")
+            .finish()
+    }
 }
 
 impl OAuth2RefreshToken {
@@ -301,7 +332,7 @@ impl OAuth2RefreshToken {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct OAuth2TokenResponse {
     pub access_token: String,
     pub token_type: String,
@@ -310,6 +341,21 @@ pub struct OAuth2TokenResponse {
     pub refresh_token: Option<String>,
     #[serde(default)]
     pub scope: Option<String>,
+}
+
+impl fmt::Debug for OAuth2TokenResponse {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("OAuth2TokenResponse")
+            .field("access_token", &"[redacted]")
+            .field("token_type", &self.token_type)
+            .field("expires_in", &self.expires_in)
+            .field(
+                "refresh_token",
+                &self.refresh_token.as_ref().map(|_| "[redacted]"),
+            )
+            .field("scope", &self.scope)
+            .finish()
+    }
 }
 
 fn encode_form_pairs(pairs: &[(&str, &str)]) -> String {
@@ -346,7 +392,7 @@ fn percent_encode(value: &str) -> String {
 mod tests {
     use super::{
         OAuth2AuthorizationRequest, OAuth2Client, OAuth2CodeExchange, OAuth2RefreshToken,
-        OAuth2Scope,
+        OAuth2Scope, OAuth2TokenResponse,
     };
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
@@ -449,5 +495,29 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("refresh_token must not be empty"));
+    }
+
+    #[test]
+    fn oauth2_debug_redacts_credentials() {
+        let client = OAuth2Client::new("client-id", "SECRET_CLIENT_SENTINEL");
+        let code = OAuth2CodeExchange::new("SECRET_CODE_SENTINEL", "https://app.example/callback");
+        let refresh = OAuth2RefreshToken::new("SECRET_REFRESH_SENTINEL");
+        let token = OAuth2TokenResponse {
+            access_token: "SECRET_ACCESS_SENTINEL".to_string(),
+            token_type: "Bearer".to_string(),
+            expires_in: 3600,
+            refresh_token: Some("SECRET_RESPONSE_REFRESH_SENTINEL".to_string()),
+            scope: Some("identify".to_string()),
+        };
+
+        let debug = format!("{client:?}\n{code:?}\n{refresh:?}\n{token:?}");
+        assert!(debug.contains("[redacted]"));
+        assert!(debug.contains("client-id"));
+        assert!(debug.contains("https://app.example/callback"));
+        assert!(!debug.contains("SECRET_CLIENT_SENTINEL"));
+        assert!(!debug.contains("SECRET_CODE_SENTINEL"));
+        assert!(!debug.contains("SECRET_REFRESH_SENTINEL"));
+        assert!(!debug.contains("SECRET_ACCESS_SENTINEL"));
+        assert!(!debug.contains("SECRET_RESPONSE_REFRESH_SENTINEL"));
     }
 }

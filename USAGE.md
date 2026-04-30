@@ -350,7 +350,7 @@ On the gateway runtime, `Context` exposes manager shortcuts in all builds:
 - `ctx.messages()`
 - `ctx.roles()`
 
-These managers keep the REST handle and cache handle together. The `cache` feature is enabled by default, so normal installs store gateway cache data in memory before falling back to HTTP. If you compile with `default-features = false`, the same types still exist but cached reads stay empty; use `CacheHandle::is_enabled()` when shared code needs to detect that mode.
+These managers keep the REST handle and cache handle together. The `cache` feature is enabled by default, so normal installs store gateway cache data in memory before falling back to HTTP. The default cache policy is bounded; if you compile with `default-features = false`, the same types still exist but cached reads stay empty. Use `CacheHandle::is_enabled()` when shared code needs to detect that mode.
 
 ```rust
 async fn inspect_cache(ctx: &discordrs::Context) {
@@ -359,22 +359,25 @@ async fn inspect_cache(ctx: &discordrs::Context) {
 }
 ```
 
-For long-running bots, create bounded cache handles instead of keeping every cached entity forever:
+For long-running bots, tune the bounded defaults to match your guild size and lookup patterns:
 
 ```rust
 use std::time::Duration;
-use discordrs::{CacheConfig, CacheHandle};
+use discordrs::{gateway_intents, CacheConfig, Client};
 
-let cache = CacheHandle::with_config(
-    CacheConfig::unbounded()
-        .max_messages_per_channel(100)
-        .max_total_messages(10_000)
-        .message_ttl(Duration::from_secs(60 * 60))
-        .presence_ttl(Duration::from_secs(10 * 60))
-        .max_presences(50_000)
-        .max_members_per_guild(25_000),
-);
+let client = Client::builder("bot-token", gateway_intents::GUILD_MESSAGES)
+    .cache_config(
+        CacheConfig::default()
+            .max_messages_per_channel(100)
+            .max_total_messages(10_000)
+            .message_ttl(Duration::from_secs(60 * 60))
+            .presence_ttl(Duration::from_secs(10 * 60))
+            .max_presences(50_000)
+            .max_members_per_guild(25_000),
+    );
 ```
+
+Use `CacheConfig::unbounded()` only when retaining all cached gateway data is an intentional operator decision.
 
 ## 8.5 REST Safety Notes
 

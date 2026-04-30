@@ -16,7 +16,8 @@ use tokio::time::{sleep, timeout, Duration};
 use tracing::{info, warn};
 
 use crate::cache::{
-    CacheHandle, ChannelManager, GuildManager, MemberManager, MessageManager, RoleManager,
+    CacheConfig, CacheHandle, ChannelManager, GuildManager, MemberManager, MessageManager,
+    RoleManager,
 };
 #[cfg(feature = "collectors")]
 use crate::collector::CollectorHub;
@@ -980,6 +981,7 @@ pub struct ClientBuilder {
     data: TypeMap,
     application_id: Option<u64>,
     gateway_config: GatewayConnectionConfig,
+    cache_config: CacheConfig,
     shard: Option<(u32, u32)>,
 }
 
@@ -1004,6 +1006,11 @@ impl ClientBuilder {
         self
     }
 
+    pub fn cache_config(mut self, cache_config: CacheConfig) -> Self {
+        self.cache_config = cache_config;
+        self
+    }
+
     pub fn shard(mut self, shard_id: u32, shard_count: u32) -> Self {
         self.shard = Some((shard_id, shard_count.max(1)));
         self
@@ -1023,12 +1030,13 @@ impl ClientBuilder {
             data,
             application_id,
             gateway_config,
+            cache_config,
             shard,
         } = self;
         let handler = handler.ok_or("event_handler is required")?;
         let application_id = application_id.unwrap_or(0);
         let shard = shard.unwrap_or((0, 1));
-        let runtime = SharedRuntime::new(&token, application_id, data);
+        let runtime = SharedRuntime::new(&token, application_id, data, cache_config);
         #[cfg(feature = "sharding")]
         {
             start_gateway_shard(
@@ -1085,12 +1093,13 @@ impl ClientBuilder {
             data,
             application_id,
             gateway_config,
+            cache_config,
             shard: _,
         } = self;
         let handler = handler.ok_or("event_handler is required")?;
         let application_id = application_id.unwrap_or(0);
         let total_shards = shard_count.max(1);
-        let runtime = SharedRuntime::new(&token, application_id, data);
+        let runtime = SharedRuntime::new(&token, application_id, data, cache_config);
         spawn_shard_supervisor(SpawnShardSupervisorConfig {
             token,
             intents,
@@ -1113,6 +1122,7 @@ impl ClientBuilder {
             data,
             application_id,
             gateway_config,
+            cache_config,
             shard: _,
         } = self;
         let handler = handler.ok_or("event_handler is required")?;
@@ -1120,7 +1130,7 @@ impl ClientBuilder {
         let metadata_http = DiscordHttpClient::new(&token, application_id);
         let gateway_bot = metadata_http.get_gateway_bot().await?;
         let auto_shard_plan = auto_shard_plan(&gateway_bot);
-        let runtime = SharedRuntime::new(&token, application_id, data);
+        let runtime = SharedRuntime::new(&token, application_id, data, cache_config);
         let gateway_config = gateway_config.with_base_url(gateway_bot.url);
 
         spawn_shard_supervisor(SpawnShardSupervisorConfig {
@@ -1151,6 +1161,7 @@ impl Client {
             data: TypeMap::new(),
             application_id: None,
             gateway_config: GatewayConnectionConfig::default(),
+            cache_config: CacheConfig::default(),
             shard: None,
         }
     }
@@ -1179,11 +1190,11 @@ struct SharedRuntime {
 }
 
 impl SharedRuntime {
-    fn new(token: &str, application_id: u64, data: TypeMap) -> Self {
+    fn new(token: &str, application_id: u64, data: TypeMap, cache_config: CacheConfig) -> Self {
         Self {
             http: Arc::new(DiscordHttpClient::new(token, application_id)),
             data: Arc::new(RwLock::new(data)),
-            cache: CacheHandle::new(),
+            cache: CacheHandle::with_config(cache_config),
             gateway_commands: Arc::new(RwLock::new(HashMap::new())),
             #[cfg(feature = "voice")]
             voice: Arc::new(RwLock::new(VoiceManager::new())),
@@ -1834,6 +1845,7 @@ mod tests {
     use super::{auto_shard_plan, ShardSupervisor};
     use super::{EventHandler, ShardMessenger};
     use crate::bitfield::Intents;
+    use crate::cache::CacheConfig;
     use crate::event::{
         decode_event, BulkMessageDeleteEvent, ChannelEvent, ChannelPinsUpdateEvent, Event,
         GuildBanEvent, GuildDeleteEvent, GuildDeletePayload, GuildEmojisUpdateEvent, GuildEvent,
@@ -2717,6 +2729,7 @@ mod tests {
             .application_id(42)
             .type_map_insert::<String>("state".to_string())
             .gateway_config(gateway_config.clone())
+            .cache_config(CacheConfig::unbounded().max_total_messages(5))
             .shard(9, 0);
 
         assert_eq!(builder.application_id, Some(42));
@@ -2725,6 +2738,8 @@ mod tests {
             builder.gateway_config.normalized_url(),
             gateway_config.normalized_url()
         );
+        assert_eq!(builder.cache_config.max_total_messages, Some(5));
+        assert_eq!(builder.cache_config.max_users, None);
         assert_eq!(
             builder.data.get::<String>().map(String::as_str),
             Some("state")
@@ -2787,7 +2802,7 @@ mod tests {
     async fn shared_runtime_context_reuses_shared_state() {
         let mut data = super::TypeMap::new();
         data.insert::<String>("runtime".to_string());
-        let runtime = super::SharedRuntime::new("token", 77, data);
+        let runtime = super::SharedRuntime::new("token", 77, data, CacheConfig::default());
         let (command_tx, _command_rx) = mpsc::unbounded_channel();
 
         runtime.gateway_commands.write().await.insert(
@@ -2820,7 +2835,8 @@ mod tests {
     #[cfg(feature = "collectors")]
     #[tokio::test]
     async fn shared_runtime_context_reuses_collectors_hub() {
-        let runtime = super::SharedRuntime::new("token", 0, super::TypeMap::new());
+        let runtime =
+            super::SharedRuntime::new("token", 0, super::TypeMap::new(), CacheConfig::default());
         let context = runtime.context((0, 1));
         let mut collector = context
             .collectors()
@@ -4590,7 +4606,8 @@ mod tests {
             .expect("manager mutex poisoned")
             .prepare_runtime(0)
             .unwrap();
-        let runtime = super::SharedRuntime::new("token", 0, super::TypeMap::new());
+        let runtime =
+            super::SharedRuntime::new("token", 0, super::TypeMap::new(), CacheConfig::default());
         let (boot_tx, boot_rx) = watch::channel(false);
         drop(boot_tx);
 

@@ -23,6 +23,24 @@ use crate::types::Emoji;
 #[cfg(feature = "gateway")]
 use crate::manager::CachedManager;
 
+const DEFAULT_MAX_MESSAGES_PER_CHANNEL: usize = 100;
+const DEFAULT_MAX_TOTAL_MESSAGES: usize = 10_000;
+const DEFAULT_MAX_PRESENCES: usize = 50_000;
+const DEFAULT_MAX_MEMBERS_PER_GUILD: usize = 25_000;
+const DEFAULT_MAX_GUILDS: usize = 1_000;
+const DEFAULT_MAX_CHANNELS: usize = 50_000;
+const DEFAULT_MAX_USERS: usize = 100_000;
+const DEFAULT_MAX_ROLES: usize = 50_000;
+const DEFAULT_MAX_VOICE_STATES: usize = 50_000;
+const DEFAULT_MAX_SOUNDBOARD_SOUNDS: usize = 50_000;
+const DEFAULT_MAX_EMOJIS: usize = 50_000;
+const DEFAULT_MAX_STICKERS: usize = 50_000;
+const DEFAULT_MAX_SCHEDULED_EVENTS: usize = 50_000;
+const DEFAULT_MAX_STAGE_INSTANCES: usize = 50_000;
+const DEFAULT_MESSAGE_TTL_SECS: u64 = 60 * 60;
+const DEFAULT_PRESENCE_TTL_SECS: u64 = 10 * 60;
+const DEFAULT_MEMBER_TTL_SECS: u64 = 24 * 60 * 60;
+
 #[cfg(feature = "cache")]
 #[derive(Clone, Default)]
 struct CacheStore {
@@ -84,6 +102,38 @@ pub struct CacheConfig {
 
 impl Default for CacheConfig {
     fn default() -> Self {
+        Self::bounded()
+    }
+}
+
+impl CacheConfig {
+    pub fn bounded() -> Self {
+        Self {
+            max_messages_per_channel: Some(DEFAULT_MAX_MESSAGES_PER_CHANNEL),
+            max_total_messages: Some(DEFAULT_MAX_TOTAL_MESSAGES),
+            max_presences: Some(DEFAULT_MAX_PRESENCES),
+            max_members_per_guild: Some(DEFAULT_MAX_MEMBERS_PER_GUILD),
+            max_guilds: Some(DEFAULT_MAX_GUILDS),
+            max_channels: Some(DEFAULT_MAX_CHANNELS),
+            max_users: Some(DEFAULT_MAX_USERS),
+            max_roles: Some(DEFAULT_MAX_ROLES),
+            max_voice_states: Some(DEFAULT_MAX_VOICE_STATES),
+            max_soundboard_sounds: Some(DEFAULT_MAX_SOUNDBOARD_SOUNDS),
+            max_emojis: Some(DEFAULT_MAX_EMOJIS),
+            max_stickers: Some(DEFAULT_MAX_STICKERS),
+            max_scheduled_events: Some(DEFAULT_MAX_SCHEDULED_EVENTS),
+            max_stage_instances: Some(DEFAULT_MAX_STAGE_INSTANCES),
+            message_ttl: Some(Duration::from_secs(DEFAULT_MESSAGE_TTL_SECS)),
+            presence_ttl: Some(Duration::from_secs(DEFAULT_PRESENCE_TTL_SECS)),
+            member_ttl: Some(Duration::from_secs(DEFAULT_MEMBER_TTL_SECS)),
+            cache_emojis: true,
+            cache_stickers: true,
+            cache_scheduled_events: true,
+            cache_stage_instances: true,
+        }
+    }
+
+    pub fn unbounded() -> Self {
         Self {
             max_messages_per_channel: None,
             max_total_messages: None,
@@ -107,12 +157,6 @@ impl Default for CacheConfig {
             cache_scheduled_events: true,
             cache_stage_instances: true,
         }
-    }
-}
-
-impl CacheConfig {
-    pub fn unbounded() -> Self {
-        Self::default()
     }
 
     pub fn max_messages_per_channel(mut self, max: usize) -> Self {
@@ -2285,6 +2329,29 @@ mod tests {
             .member(&guild_id, &Snowflake::from("400"))
             .await
             .is_none());
+    }
+
+    #[test]
+    fn cache_config_default_is_bounded_unbounded_is_explicit() {
+        let bounded = CacheConfig::default();
+        assert_eq!(bounded.max_messages_per_channel, Some(100));
+        assert_eq!(bounded.max_total_messages, Some(10_000));
+        assert_eq!(bounded.max_presences, Some(50_000));
+        assert_eq!(bounded.max_members_per_guild, Some(25_000));
+        assert_eq!(bounded.max_users, Some(100_000));
+        assert_eq!(bounded.message_ttl, Some(Duration::from_secs(60 * 60)));
+        assert_eq!(bounded.presence_ttl, Some(Duration::from_secs(10 * 60)));
+        assert_eq!(bounded.member_ttl, Some(Duration::from_secs(24 * 60 * 60)));
+
+        let unbounded = CacheConfig::unbounded();
+        assert_eq!(unbounded.max_messages_per_channel, None);
+        assert_eq!(unbounded.max_total_messages, None);
+        assert_eq!(unbounded.max_presences, None);
+        assert_eq!(unbounded.max_members_per_guild, None);
+        assert_eq!(unbounded.max_users, None);
+        assert_eq!(unbounded.message_ttl, None);
+        assert_eq!(unbounded.presence_ttl, None);
+        assert_eq!(unbounded.member_ttl, None);
     }
 
     #[tokio::test]
