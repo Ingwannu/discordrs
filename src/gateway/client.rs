@@ -265,7 +265,7 @@ impl GatewayClient {
                 &self.token,
                 self.intents,
                 self.shard_info,
-                self.gateway_config.compression_kind().is_none(),
+                false,
             );
             write
                 .send(WsMessage::Text(identify.to_string().into()))
@@ -1297,6 +1297,7 @@ mod tests {
         ));
         assert_eq!(identify["op"], serde_json::json!(2));
         assert_eq!(identify["d"]["token"], serde_json::json!("secret-token"));
+        assert!(identify["d"].get("compress").is_none());
         assert_eq!(client.session_id.as_deref(), Some("session-1"));
         assert_eq!(
             client.resume_gateway_url.as_deref(),
