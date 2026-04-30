@@ -238,10 +238,21 @@ impl GatewayClient {
     ) -> Result<ReconnectAction, crate::error::DiscordError> {
         let (ws_stream, _) = connect_async(url).await?;
         let (mut write, mut read) = ws_stream.split();
+        let mut compression_decoder =
+            GatewayCompressionDecoder::new(self.gateway_config.compression_kind());
 
         // Wait for Hello
-        let hello = read.next().await.ok_or("gateway closed before Hello")??;
-        let hello_payload: Value = serde_json::from_str(hello.to_text()?)?;
+        let hello_text = loop {
+            let hello = read.next().await.ok_or("gateway closed before Hello")??;
+            match decode_gateway_message(hello, &mut compression_decoder) {
+                Ok(Some(text)) => break text,
+                Ok(None) => continue,
+                Err(error) => {
+                    return Err(format!("failed to decode gateway Hello payload: {error}").into());
+                }
+            }
+        };
+        let hello_payload: Value = serde_json::from_str(&hello_text)?;
         let hello_op = hello_payload["op"].as_u64().unwrap_or(u64::MAX);
         if hello_op != OP_HELLO {
             return Err(format!("expected Hello opcode {OP_HELLO}, got {hello_op}").into());
@@ -261,12 +272,7 @@ impl GatewayClient {
                 .await?;
             debug!("Sent Resume");
         } else {
-            let identify = identify_payload(
-                &self.token,
-                self.intents,
-                self.shard_info,
-                false,
-            );
+            let identify = identify_payload(&self.token, self.intents, self.shard_info, false);
             write
                 .send(WsMessage::Text(identify.to_string().into()))
                 .await?;
@@ -308,24 +314,11 @@ impl GatewayClient {
         });
 
         // Main read loop
-        let mut compression_decoder =
-            GatewayCompressionDecoder::new(self.gateway_config.compression_kind());
         let mut outbound_limiter = GatewayOutboundLimiter::default();
         let action = loop {
             tokio::select! {
                 msg = read.next() => {
                     let text = match msg {
-                        Some(Ok(WsMessage::Text(text))) => text.to_string(),
-                        Some(Ok(WsMessage::Binary(bytes))) => {
-                            match compression_decoder.decode(&bytes) {
-                                Ok(Some(decompressed)) => decompressed,
-                                Ok(None) => continue,
-                                Err(e) => {
-                                    warn!("Failed to decode compressed gateway payload: {e}");
-                                    continue;
-                                }
-                            }
-                        }
                         Some(Ok(WsMessage::Close(frame))) => {
                             #[cfg(feature = "sharding")]
                             self.publish_error(terminal_close_error(frame.clone()));
@@ -334,6 +327,16 @@ impl GatewayClient {
                                 return Err(terminal_close_error(frame).into());
                             }
                             break ReconnectAction::Resume;
+                        }
+                        Some(Ok(message)) => {
+                            match decode_gateway_message(message, &mut compression_decoder) {
+                                Ok(Some(decompressed)) => decompressed,
+                                Ok(None) => continue,
+                                Err(e) => {
+                                    warn!("Failed to decode compressed gateway payload: {e}");
+                                    continue;
+                                }
+                            }
                         }
                         Some(Err(e)) => {
                             #[cfg(feature = "sharding")]
@@ -347,7 +350,6 @@ impl GatewayClient {
                             warn!("Gateway stream ended");
                             break ReconnectAction::Resume;
                         }
-                        _ => continue,
                     };
 
                     let payload: Value = match serde_json::from_str(&text) {
@@ -494,6 +496,17 @@ impl GatewayClient {
 
         heartbeat_handle.abort();
         Ok(action)
+    }
+}
+
+fn decode_gateway_message(
+    message: WsMessage,
+    compression_decoder: &mut GatewayCompressionDecoder,
+) -> Result<Option<String>, String> {
+    match message {
+        WsMessage::Text(text) => Ok(Some(text.to_string())),
+        WsMessage::Binary(bytes) => compression_decoder.decode(&bytes),
+        _ => Ok(None),
     }
 }
 
@@ -1306,6 +1319,91 @@ mod tests {
         assert_eq!(
             client.sequence.load(std::sync::atomic::Ordering::Relaxed),
             7
+        );
+        assert_eq!(events.lock().unwrap()[0].0, "READY");
+    }
+
+    #[tokio::test]
+    async fn connect_and_run_decodes_compressed_hello_and_dispatch_payloads() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let (command_tx, command_rx) = mpsc::unbounded_channel();
+        let events = Arc::new(Mutex::new(Vec::<(String, serde_json::Value)>::new()));
+        let events_for_callback = Arc::clone(&events);
+        let compressed = compress_gateway_payloads(&[
+            &serde_json::json!({
+                "op": 10,
+                "d": { "heartbeat_interval": 60_000 }
+            })
+            .to_string(),
+            &serde_json::json!({
+                "op": 0,
+                "t": "READY",
+                "s": 8,
+                "d": {
+                    "user": {
+                        "id": "1",
+                        "username": "discordrs"
+                    },
+                    "session_id": "session-compressed",
+                    "resume_gateway_url": "wss://gateway.discord.gg"
+                }
+            })
+            .to_string(),
+        ]);
+
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut ws = accept_async(stream).await.unwrap();
+
+            ws.send(WsMessage::Binary(compressed[0].clone().into()))
+                .await
+                .unwrap();
+
+            let identify_payload: serde_json::Value =
+                serde_json::from_str(&ws.next().await.unwrap().unwrap().into_text().unwrap())
+                    .unwrap();
+
+            ws.send(WsMessage::Binary(compressed[1].clone().into()))
+                .await
+                .unwrap();
+            let _ = ws.next().await;
+
+            identify_payload
+        });
+
+        let shutdown = tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(30)).await;
+            command_tx.send(GatewayCommand::Shutdown).unwrap();
+        });
+
+        let mut client = GatewayClient::new("secret-token".into(), 513)
+            .gateway_config(
+                GatewayConnectionConfig::new(format!("ws://{address}"))
+                    .compression(GatewayCompression::ZlibStream),
+            )
+            .control(command_rx);
+        let on_event: EventCallback = Arc::new(move |name, data| {
+            events_for_callback.lock().unwrap().push((name, data));
+        });
+        let action = client
+            .connect_and_run(&format!("ws://{address}"), on_event)
+            .await
+            .unwrap();
+
+        shutdown.await.unwrap();
+        let identify = server.await.unwrap();
+
+        assert!(matches!(
+            action,
+            ReconnectAction::Shutdown | ReconnectAction::Resume
+        ));
+        assert_eq!(identify["op"], serde_json::json!(2));
+        assert!(identify["d"].get("compress").is_none());
+        assert_eq!(client.session_id.as_deref(), Some("session-compressed"));
+        assert_eq!(
+            client.sequence.load(std::sync::atomic::Ordering::Relaxed),
+            8
         );
         assert_eq!(events.lock().unwrap()[0].0, "READY");
     }
