@@ -1854,6 +1854,7 @@ impl CachedManager<User> for UserManager {
 
 #[cfg(all(test, feature = "cache"))]
 mod tests {
+    #[cfg(feature = "gateway")]
     use std::sync::Arc;
     use std::time::Duration;
 
@@ -1866,10 +1867,12 @@ mod tests {
     };
     use crate::types::Emoji;
 
+    use super::{CacheConfig, CacheHandle};
+    #[cfg(feature = "gateway")]
     use super::{
-        CacheConfig, CacheHandle, ChannelManager, GuildManager, MemberManager, MessageManager,
-        RoleManager, UserManager,
+        ChannelManager, GuildManager, MemberManager, MessageManager, RoleManager, UserManager,
     };
+    #[cfg(feature = "gateway")]
     use crate::http::DiscordHttpClient;
 
     #[tokio::test]
